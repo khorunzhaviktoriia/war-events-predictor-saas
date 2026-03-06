@@ -1,0 +1,42 @@
+from telethon import TelegramClient
+import json
+import asyncio
+from datetime import datetime
+
+api_id = 12345678 #YOUR_API_ID
+api_hash = "YOUR_API_HASH"
+
+channels = [
+    "DeepStateUA",
+    "UkraineNow",
+    "kpszsu"
+]
+
+start_date = datetime(2022, 2, 24)
+end_date = datetime.now()
+
+async def main():
+    async with TelegramClient("telegram_session", api_id, api_hash) as client:
+        
+        all_messages = []
+
+        for channel in channels:
+            async for message in client.iter_messages(channel, limit=500):
+                if message.text:
+            async for message in client.iter_messages(channel, limit=None):
+                if message.date < start_date:
+                    break
+                if message.date <= end_date and message.text:
+                    all_messages.append({
+                        "date": str(message.date),
+                        "channel": channel,
+                        "message": message.text
+                    })
+
+        with open("telegram_data.json", "w", encoding="utf-8") as f:
+            json.dump(all_messages, f, ensure_ascii=False, indent=4)
+
+        print(f"Data collection finished. {len(all_messages)} messages saved to telegram_data.json")
+
+
+asyncio.run(main())
