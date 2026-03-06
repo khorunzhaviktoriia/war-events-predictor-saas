@@ -21,8 +21,6 @@ async def main():
         all_messages = []
 
         for channel in channels:
-            async for message in client.iter_messages(channel, limit=500):
-                if message.text:
             async for message in client.iter_messages(channel, limit=None):
                 if message.date < start_date:
                     break
