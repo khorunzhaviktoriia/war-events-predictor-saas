@@ -47,7 +47,7 @@ def scrape_data(date):
             data_list.append({
                 "date": date,
                 "title": title,
-                "link": link
+                "link": link,
                 "text": article
             })
 
