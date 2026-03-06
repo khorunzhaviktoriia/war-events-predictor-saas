@@ -42,11 +42,13 @@ def scrape_data(date):
 
             title_tag = article_soup.find("h1")
             title = title_tag.text.strip() if title_tag else "No title"
-
+            article_tags = article_soup.find("article")
+            article = article_tags.get_text(separator=" ", strip=True) if article_tags else "No text"
             data_list.append({
                 "date": date,
                 "title": title,
                 "link": link
+                "text": article
             })
 
     return data_list
@@ -75,4 +77,5 @@ def main():
 
 if __name__=="__main__":
     main()
+
 
