@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import requests
 import os
+import argparse
 
 VCRO_KEY = ""
 
@@ -42,7 +43,13 @@ def get_weather(location: str):
     else:
         raise Exception(f"{response.status_code}: {response.text}")
 
+
 if __name__ == "__main__":
-    location = "Odesa, Ukraine"
+    parser = argparse.ArgumentParser(description="Get 24h weather forecast")
+    parser.add_argument("location", type=str, help="Location, e.g. 'Kyiv, Ukraine'")
+
+    args = parser.parse_args()
+    location = args.location
+
     result = get_weather(location)
     print(json.dumps(result, indent=4))
