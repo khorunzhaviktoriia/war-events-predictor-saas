@@ -2,14 +2,41 @@ import datetime as dt
 import json
 import requests
 import os
-import argparse
 
-VCRO_KEY = ""
+VCRO_KEY = ''
 
-def save_weather_data(data: json, location: str):
+REGIONS = {
+    2:  "Vinnytsia, Ukraine",
+    3:  "Lutsk, Ukraine",
+    4:  "Dnipro, Ukraine",
+    5:  "Kramatorsk, Ukraine",
+    6:  "Zhytomyr, Ukraine",
+    7:  "Uzhhorod, Ukraine",
+    8:  "Zaporizhzhia, Ukraine",
+    9:  "Ivano-Frankivsk, Ukraine",
+    10: "Kyiv, Ukraine",
+    11: "Kropyvnytskyi, Ukraine",
+    12: "Donetsk, Ukraine",
+    13: "Lviv, Ukraine",
+    14: "Mykolaiv, Ukraine",
+    15: "Odesa, Ukraine",
+    16: "Poltava, Ukraine",
+    17: "Rivne, Ukraine",
+    18: "Sumy, Ukraine",
+    19: "Ternopil, Ukraine",
+    20: "Kharkiv, Ukraine",
+    21: "Kherson, Ukraine",
+    22: "Khmelnytskyi, Ukraine",
+    23: "Cherkasy, Ukraine",
+    24: "Chernivtsi, Ukraine",
+    25: "Chernihiv, Ukraine",
+    26: "Kyiv, Ukraine",
+}
+
+def save_weather_data(data: json):
     os.makedirs("data/weather_forecast", exist_ok=True)
     now_str = dt.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = f"data/weather_forecast/forecast_{location}_{now_str}.json"
+    filename = f"data/weather_forecast/forecast_{now_str}.json"
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
     print(f"Data saved to {filename}")
@@ -36,20 +63,24 @@ def get_weather(location: str):
                     next_24_hours.append(hour)
 
         next_24_hours = next_24_hours[:24]
-
-        save_weather_data(next_24_hours, location)
         return next_24_hours
 
     else:
         raise Exception(f"{response.status_code}: {response.text}")
 
+def get_weather_for_all_regions():
+    result = {}
+
+    for id, location in REGIONS.items():
+        print(f"Fetching {location}...")
+        try:
+            result[id] = get_weather(location)
+        except Exception as e:
+            print(f"Error for {location}: {e}")
+            result[id] = []
+
+    return result
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Get 24h weather forecast")
-    parser.add_argument("location", type=str, help="Location, e.g. 'Kyiv, Ukraine'")
-
-    args = parser.parse_args()
-    location = args.location
-
-    result = get_weather(location)
-    print(json.dumps(result, indent=4))
+    result = get_weather_for_all_regions()
+    save_weather_data(result)
