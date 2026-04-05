@@ -1,6 +1,6 @@
 import json
 
-FILE_PATH = "data/forecast_latest.json"
+FILE_PATH = "data/forecast_mock.json"
 
 
 def load_forecast():
