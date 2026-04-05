@@ -1,8 +1,7 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.storage import load_forecast
-from app.services.predictor import update_forecast_file
-from app.services.regions import load_regions
+from app.services.predictor import update_forecast_file, load_regions
 
 app = FastAPI()
 
