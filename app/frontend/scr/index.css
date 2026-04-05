@@ -1,0 +1,50 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f4f4f4;
+}
+
+.container {
+  max-width: 900px;
+  margin: 40px auto;
+  background: white;
+  padding: 24px;
+  border-radius: 10px;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+.controls,
+.buttons {
+  margin-bottom: 20px;
+}
+
+select,
+button {
+  padding: 8px 12px;
+  margin-right: 10px;
+  font-size: 16px;
+}
+
+button {
+  cursor: pointer;
+}
+
+.error {
+  color: red;
+}
+
+.result {
+  margin-top: 20px;
+  padding: 16px;
+  background: #fafafa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
