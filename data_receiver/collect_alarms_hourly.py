@@ -49,15 +49,17 @@ API_TO_OURS = {
 def date_alarm(date: datetime) -> json:
     date_str = date.strftime("%Y%m%d")
 
-    respose = requests.get(
+    response = requests.get(
         f"{BASE_URL}/alerts/dateHistory",
         headers={"Authorization": API_KEY},
         params={"date": date_str}
     )
 
-    if respose.status_code == 200:
-        data = respose.json()
+    if response.status_code == 200:
+        data = response.json()
         return data
+    else:
+        raise Exception(f"{response.status_code}: {response.text}")
 
 def alarms_in_hour(date_hour: datetime) -> dict:
     hour_start = date_hour.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
