@@ -9,7 +9,7 @@ BASE_URL = "https://api.ukrainealarm.com/api/v3"
 
 REGIONS = {
     2: "Vinnytsia", 3: "Volyn", 4: "Dnipropetrovsk", 5: "Donetsk", 6: "Zhytomyr", 7: "Zakarpattia",
-    8: "Zaporizhzhia", 9: "Ivano-Frankivsk", 10: "Kyiv Oblast", 11: "Kirovohrad", 12: "Luhansk", 13: "Lviv",
+    8: "Zaporizhzhia", 9: "Ivano-Frankivsk", 10: "Kyiv Oblast", 11: "Kirovohrad", 13: "Lviv",
     14: "Mykolaiv", 15: "Odesa", 16: "Poltava", 17: "Rivne", 18: "Sumy", 19: "Ternopil",
     20: "Kharkiv", 21: "Kherson", 22: "Khmelnytskyi", 23: "Cherkasy", 24: "Chernivtsi", 25: "Chernihiv", 26: "Kyiv",
 }
@@ -25,7 +25,6 @@ DISTRICT_TO_OBLAST = {
     68: 9, 72: 9, 69: 9, 70: 9, 67: 9, 71: 9,          # Ivano-Frankivsk
     77: 10, 78: 10, 73: 10, 74: 10, 75: 10, 76: 10, 79: 10,  # Kyiv Oblast
     81: 11, 80: 11, 82: 11, 83: 11,                    # Kirovohrad
-    86: 12, 85: 12, 84: 12, 87: 12,                    # Luhansk
     92: 13, 90: 13, 93: 13, 89: 13, 94: 13, 88: 13, 91: 13,  # Lviv
     96: 14, 97: 14, 98: 14, 95: 14,                    # Mykolaiv
     103: 15, 100: 15, 105: 15, 104: 15, 101: 15, 99: 15, 102: 15,  # Odesa
@@ -105,12 +104,9 @@ def get_all_regions():
     print(respose.status_code)
     return respose.json()
 
-
 if __name__ == "__main__":
     target = datetime.now(timezone.utc) - timedelta(hours=1)
-    #print(date_alarm(target))
     result = alarms_in_hour(target)
     print(f"alarms between {target.astimezone(ZoneInfo("Europe/Kyiv")).replace(minute=0, second=0, microsecond=0)} and {target.astimezone(ZoneInfo("Europe/Kyiv")).replace(minute=0, second=0, microsecond=0)+timedelta(hours=1)}")
     print(result)
     save_result(result, target.astimezone(ZoneInfo("Europe/Kyiv")))
-    #print(get_all_regions())
