@@ -16,7 +16,6 @@ REGIONS = {
     9:  "Ivano-Frankivsk, Ukraine",
     10: "Kyiv, Ukraine",
     11: "Kropyvnytskyi, Ukraine",
-    12: "Donetsk, Ukraine",
     13: "Lviv, Ukraine",
     14: "Mykolaiv, Ukraine",
     15: "Odesa, Ukraine",
