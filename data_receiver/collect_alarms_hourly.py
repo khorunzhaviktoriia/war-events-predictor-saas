@@ -1,10 +1,10 @@
-import os
 import json
 import requests
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
-API_KEY = ""
+API_KEY = ''
 BASE_URL = "https://api.ukrainealarm.com/api/v3"
 
 REGIONS = {
@@ -39,11 +39,6 @@ DISTRICT_TO_OBLAST = {
     139: 24, 137: 24, 138: 24,                          # Chernivtsi
     143: 25, 140: 25, 142: 25, 141: 25, 144: 25,       # Chernihiv
     31: 26,                                             # Kyiv city
-}
-
-API_TO_OURS = {
-    4: 2, 8: 3, 9: 4, 28: 5, 10: 6, 11: 7, 12: 8, 13: 9, 14: 10, 15: 11, 16: 12, 27: 13, 17: 14,
-    18: 15, 19: 16, 5: 17, 20: 18, 21: 19, 22: 20, 23: 21, 3: 22, 24: 23, 26: 24, 25: 25, 31: 26,
 }
 
 def date_alarm(date: datetime) -> json:
@@ -90,12 +85,18 @@ def alarms_in_hour(date_hour: datetime) -> dict:
     return result
 
 def save_result(result: dict, hour: datetime) -> None:
-    folder = "alarms"
-    os.makedirs(folder, exist_ok=True)
-    filename = f"{hour.strftime('%Y-%m-%d_%H-%M-%S')}.json"
-    filepath = os.path.join(folder, filename)
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    base_dir = Path(__file__).resolve().parent.parent
+
+    date_str = hour.strftime("%Y-%m-%d")
+    time_str = hour.strftime("%H-%M")
+
+    dir_path = base_dir / "data" / "raw_snapshots" / "alarms_hourly" / date_str
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    file_path = dir_path / f"alarms_hour_{date_str}_{time_str}.json"
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, indent=4, ensure_ascii=False)
 
 def get_all_regions():
     respose = requests.get(
@@ -109,6 +110,4 @@ def get_all_regions():
 if __name__ == "__main__":
     target = datetime.now(timezone.utc) - timedelta(hours=1)
     result = alarms_in_hour(target)
-    print(f"alarms between {target.astimezone(ZoneInfo("Europe/Kyiv")).replace(minute=0, second=0, microsecond=0)} and {target.astimezone(ZoneInfo("Europe/Kyiv")).replace(minute=0, second=0, microsecond=0)+timedelta(hours=1)}")
-    print(result)
     save_result(result, target.astimezone(ZoneInfo("Europe/Kyiv")))
