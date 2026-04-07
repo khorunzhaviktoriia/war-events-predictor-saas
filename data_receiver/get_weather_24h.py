@@ -46,7 +46,6 @@ def save_weather_data(data: dict, date: dt.datetime):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-    print(f"Data saved to {file_path}")
 
 def get_weather(location: str):
     url_base_url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
@@ -79,7 +78,6 @@ def get_weather_for_all_regions():
     result = {}
 
     for id, location in REGIONS.items():
-        print(f"Fetching {location}...")
         try:
             result[id] = get_weather(location)
         except Exception as e:
