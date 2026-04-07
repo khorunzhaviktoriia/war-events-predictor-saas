@@ -1,7 +1,7 @@
 import datetime as dt
 import json
 import requests
-import os
+from pathlib import Path
 
 VCRO_KEY = ''
 
@@ -32,13 +32,21 @@ REGIONS = {
     26: "Kyiv, Ukraine",
 }
 
-def save_weather_data(data: json):
-    os.makedirs("data/weather_forecast", exist_ok=True)
-    now_str = dt.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = f"data/weather_forecast/forecast_{now_str}.json"
-    with open(filename, 'w') as f:
-        json.dump(data, f, indent=4)
-    print(f"Data saved to {filename}")
+def save_weather_data(data: dict, date: dt.datetime):
+    base_dir = Path(__file__).resolve().parent.parent
+
+    date_str = date.strftime("%Y-%m-%d")
+    time_str = date.strftime("%H-%M")
+
+    dir_path = base_dir / "data" / "raw_snapshots" / "weather_forecast" / date_str
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    file_path = dir_path / f"weather_forecast_{date_str}_{time_str}.json"
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+    print(f"Data saved to {file_path}")
 
 def get_weather(location: str):
     url_base_url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
@@ -82,4 +90,5 @@ def get_weather_for_all_regions():
 
 if __name__ == "__main__":
     result = get_weather_for_all_regions()
-    save_weather_data(result)
+    today = dt.datetime.now()
+    save_weather_data(result, today)
