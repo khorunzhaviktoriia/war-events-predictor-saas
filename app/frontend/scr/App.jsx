@@ -7,7 +7,12 @@ function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [theme, setTheme] = useState("light");
   const [selectedTime, setSelectedTime] = useState("12:00");
+
+  useEffect(() => {
+    document.body.className = theme;
+  }, [theme]);
 
   useEffect(() => {
     const fetchRegions = async () => {
@@ -86,10 +91,10 @@ function App() {
       : [];
 
   return (
-    <div className="container">
+    <div className={`container ${theme}`}>
       <h1>Alarm Forecast</h1>
 
-      <div className="controls">
+      {/* <div className="controls">
         <label>Choose the region: </label>
         <select value={region} onChange={(e) => setRegion(e.target.value)}>
           <option value="all">All</option>
@@ -99,7 +104,7 @@ function App() {
           </option>
           ))}
         </select>
-      </div>
+      </div> */}
 
       <div className="buttons">
         <button onClick={handleGetForecast} disabled={loading}>
@@ -108,6 +113,10 @@ function App() {
 
         <button onClick={handleUpdateForecast} disabled={loading}>
           Update forecast
+        </button>
+
+        <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
+          {theme === "light" ? "🌙 Dark" : "☀️ Light"}
         </button>
       </div>
 
@@ -146,8 +155,9 @@ function App() {
 
           {region === "all" ? (
             <UkraineMap
-              forecastData={data}
+              forecastData={data.regions_forecast}
               selectedTime={selectedTime}
+              theme={theme}
             />
           ) : (
             <>
