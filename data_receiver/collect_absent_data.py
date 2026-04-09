@@ -8,6 +8,7 @@ import time
 import pandas as pd
 from bs4 import BeautifulSoup
 from collect_alarms_hourly import save_result, DISTRICT_TO_OBLAST, date_alarm, API_KEY
+from get_weather_24h_OpenMeteo import REGIONS_COORDS, WMO_CODE_MAP, wmo_to_conditions
 
 base_isw_url = "https://understandingwar.org/research/russia-ukraine"
 base_alarms_url = API_KEY
@@ -38,65 +39,6 @@ REGIONS = {
     25: ("Chernihiv",       "Chernihiv, Ukraine"),
     26: ("Kyiv",            "Kyiv, Ukraine"),
 }
-
-REGIONS_COORDS = {
-    2:  ("Vinnytsia",       49.2331, 28.4682),
-    3:  ("Volyn",           50.7472, 25.3254),
-    4:  ("Dnipropetrovsk",  48.4647, 35.0462),
-    5:  ("Donetsk",         48.7021, 37.5022),
-    6:  ("Zhytomyr",        50.2547, 28.6587),
-    7:  ("Zakarpattia",     48.6208, 22.2879),
-    8:  ("Zaporizhzhia",    47.8388, 35.1396),
-    9:  ("Ivano-Frankivsk", 48.9226, 24.7111),
-    10: ("Kyiv Oblast",     50.5117, 30.7928),
-    11: ("Kirovohrad",      48.5079, 32.2623),
-    13: ("Lviv",            49.8397, 24.0297),
-    14: ("Mykolaiv",        46.9750, 31.9946),
-    15: ("Odesa",           46.4825, 30.7233),
-    16: ("Poltava",         49.5883, 34.5514),
-    17: ("Rivne",           50.6199, 26.2516),
-    18: ("Sumy",            50.9077, 34.7981),
-    19: ("Ternopil",        49.5535, 25.5948),
-    20: ("Kharkiv",         49.9935, 36.2304),
-    21: ("Kherson",         46.6354, 32.6169),
-    22: ("Khmelnytskyi",    49.4229, 26.9870),
-    23: ("Cherkasy",        49.4444, 32.0598),
-    24: ("Chernivtsi",      48.2921, 25.9358),
-    25: ("Chernihiv",       51.4982, 31.2893),
-    26: ("Kyiv",            50.4501, 30.5234),
-}
-
-WMO_CODE_MAP = {
-    0:  ("Clear",               "clear-day"),
-    1:  ("Mostly Clear",        "clear-day"),
-    2:  ("Partially cloudy",    "partly-cloudy-day"),
-    3:  ("Overcast",            "cloudy"),
-    45: ("Fog",                 "fog"),
-    48: ("Fog",                 "fog"),
-    51: ("Drizzle",             "rain"),
-    53: ("Drizzle",             "rain"),
-    55: ("Drizzle",             "rain"),
-    56: ("Freezing Drizzle",    "rain"),
-    57: ("Freezing Drizzle",    "rain"),
-    61: ("Rain",                "rain"),
-    63: ("Rain",                "rain"),
-    65: ("Rain",                "rain"),
-    66: ("Freezing Rain",       "rain"),
-    67: ("Freezing Rain",       "rain"),
-    71: ("Snow",                "snow"),
-    73: ("Snow",                "snow"),
-    75: ("Snow",                "snow"),
-    77: ("Snow",                "snow"),
-    80: ("Rain, Partially cloudy", "rain"),
-    81: ("Rain, Overcast",      "rain"),
-    82: ("Rain, Overcast",      "rain"),
-    85: ("Snow, Partially cloudy", "snow"),
-    86: ("Snow, Overcast",      "snow"),
-    95: ("Thunderstorm",        "thunder-rain"),
-    96: ("Thunderstorm",        "thunder-rain"),
-    99: ("Thunderstorm",        "thunder-rain"),
-}
-
 
 def collect_isw(date: datetime) -> dict:
     date_str = f"{date.strftime('%B').lower()}-{date.day}-{date.year}"
@@ -227,14 +169,6 @@ def save_alarms_in_period(date_start:datetime, date_end:datetime) -> None:
             print(f"saving {current.date()}")
 
 
-
-def wmo_to_conditions(code, is_night: bool):
-    conditions, icon = WMO_CODE_MAP.get(code, ("Unknown", "cloudy"))
-
-    if is_night:
-        icon = icon.replace("clear-day", "clear-night") \
-                   .replace("partly-cloudy-day", "partly-cloudy-night")
-    return conditions, icon
 
 def is_nighttime(hour: int) -> bool:
     return hour < 6 or hour >= 21
