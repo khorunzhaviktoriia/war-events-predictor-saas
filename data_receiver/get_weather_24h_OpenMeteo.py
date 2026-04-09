@@ -207,4 +207,3 @@ if __name__ == "__main__":
     result = get_weather_for_all_regions()
     today = dt.datetime.now(KYIV_TZ)
     save_weather_data(result, today)
-    print(result)
