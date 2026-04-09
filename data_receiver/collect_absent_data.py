@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import math
 import json
 import requests
@@ -156,15 +157,26 @@ def save_isw(data: dict, date: datetime) -> None:
 
 def save_isw_in_period(date_start: datetime, date_end: datetime) -> None:
     current_day = date_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_day = date_end.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    while current_day.date() <= date_end.date():
+    while current_day <= last_day:
         article = collect_isw(current_day)
 
-        for hour in range(24):
+        if current_day.date() == date_start.date():
+            start_hour = date_start.hour
+        else:
+            start_hour = 0
+
+        if current_day.date() == date_end.date():
+            end_hour = date_end.hour
+        else:
+            end_hour = 24
+
+        for hour in range(start_hour, end_hour):
             current_hour = current_day + timedelta(hours=hour)
             save_isw(article, current_hour)
 
-        print(f"saved isw for {current_day}")
+        print(f"saved isw for {current_day.date()} hours {start_hour}..{end_hour - 1}")
         current_day += timedelta(days=1)
 
 
@@ -193,16 +205,17 @@ def alarms_in_hour(alarms: dict, hour_start:datetime) -> dict:
     return result
 
 def save_alarms_in_period(date_start:datetime, date_end:datetime) -> None:
-    current = date_start.replace(hour=0, minute=0, second=0, tzinfo=timezone.utc)
-    end = date_end.replace(hour=23, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+    date_start = date_start.replace(tzinfo=ZoneInfo("Europe/Kyiv"))
+    current = date_start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    end = date_end.replace(tzinfo=ZoneInfo("Europe/Kyiv")).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
     current_date = current.date()
     alarms_current = date_alarm(current)
     print(f"success! saving {current.date()}")
 
-    while current <= end:
+    while current <  end:
         alarms = alarms_in_hour(alarms_current, current)
-        save_result(alarms, current)
+        save_result(alarms, current.astimezone(ZoneInfo("Europe/Kyiv")))
 
         current += timedelta(hours=1)
 
@@ -386,31 +399,43 @@ def save_hourly_snapshot(snapshot: dict, date: datetime.date, hour: int, base_di
         json.dump(snapshot, f, indent=2, ensure_ascii=False)
 
 def save_weather_in_period(date_start: datetime, date_end: datetime) -> None:
-    date_start = date_start.date()
-    date_end = date_end.date()
     base_dir = Path(__file__).resolve().parent.parent
-    current = date_start
-    while current <= date_end:
+
+    current_day = date_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_day = date_end.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    while current_day <= last_day:
         all_regions_data: dict = {}
 
         for region_id, (region_name, lat, lon) in REGIONS_COORDS.items():
             try:
-                hourly = get_day_weather(lat, lon, current)
+                hourly = get_day_weather(lat, lon, current_day.date())
                 all_regions_data[region_id] = hourly
-
             except Exception as e:
                 all_regions_data[region_id] = {}
+                print(f"error for {region_name} on {current_day.date()}: {e}")
+
             time.sleep(0.1)
 
-        for hour in range(24):
-            snapshot = build_hourly_snapshot(current, hour, all_regions_data)
-            save_hourly_snapshot(snapshot, current, hour, base_dir)
+        if current_day.date() == date_start.date():
+            start_hour = date_start.hour
+        else:
+            start_hour = 0
 
-        print(f"saved weather for {current}")
-        current += timedelta(days=1)
+        if current_day.date() == date_end.date():
+            end_hour = date_end.hour
+        else:
+            end_hour = 24
+
+        for hour in range(start_hour, end_hour):
+            snapshot = build_hourly_snapshot(current_day.date(), hour, all_regions_data)
+            save_hourly_snapshot(snapshot, current_day.date(), hour, base_dir)
+
+        print(f"saved weather for {current_day.date()} hours {start_hour}..{end_hour - 1}")
+        current_day += timedelta(days=1)
 
 def save_everything(date_start:datetime):
-    date_end = (datetime.now() - timedelta(days=1)).replace(hour = 23, minute=0, second=0)
+    date_end = datetime.now().replace(minute=0, second=0)
 
     save_isw_in_period(date_start, date_end)
     save_alarms_in_period(date_start, date_end)
