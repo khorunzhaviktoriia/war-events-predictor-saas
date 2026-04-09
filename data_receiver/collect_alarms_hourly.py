@@ -3,6 +3,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
+import time
 
 API_KEY = ''
 BASE_URL = "https://api.ukrainealarm.com/api/v3"
@@ -44,17 +45,21 @@ DISTRICT_TO_OBLAST = {
 def date_alarm(date: datetime) -> json:
     date_str = date.strftime("%Y%m%d")
 
-    response = requests.get(
-        f"{BASE_URL}/alerts/dateHistory",
-        headers={"Authorization": API_KEY},
-        params={"date": date_str}
-    )
+    while True:
 
-    if response.status_code == 200:
-        data = response.json()
-        return data
-    else:
-        raise Exception(f"{response.status_code}: {response.text}")
+        response = requests.get(
+            f"{BASE_URL}/alerts/dateHistory",
+            headers={"Authorization": API_KEY},
+            params={"date": date_str}
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        else:
+            print(f"Error {response.status_code}. Trying again")
+            time.sleep(5)
+            continue
 
 def alarms_in_hour(date_hour: datetime) -> dict:
     hour_start = date_hour.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
@@ -88,7 +93,7 @@ def save_result(result: dict, hour: datetime) -> None:
     base_dir = Path(__file__).resolve().parent.parent
 
     date_str = hour.strftime("%Y-%m-%d")
-    time_str = hour.strftime("%H-%M")
+    time_str = hour.replace(minute=0, second=0).strftime("%H-%M")
 
     dir_path = base_dir / "data" / "raw_snapshots" / "alarms_hourly" / date_str
     dir_path.mkdir(parents=True, exist_ok=True)
