@@ -1,10 +1,12 @@
 from telethon import TelegramClient
 import json
 import asyncio
-import os
-from datetime import datetime, timezone
+import pandas as pd
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-api_id = 12345678  # YOUR_API_ID
+api_id = 12345678
 api_hash = "YOUR_API_HASH"
 
 channels = [
@@ -13,96 +15,153 @@ channels = [
     "kpszsu"
 ]
 
-json_file = "telegram_data.json"
-default_start_date = datetime(2022, 2, 24, tzinfo=timezone.utc)
+BASE_DIR = Path(__file__).resolve().parent.parent
+PARQUET_PATH = BASE_DIR / "data" / "final_merged_dataset.parquet"
+SNAPSHOTS_DIR = BASE_DIR / "data" / "raw_snapshots" / "telegram"
+SESSION_NAME = "telegram_session"
+PARQUET_DATE_COLUMN = "datetime_hour"
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
+
+def get_snapshot_path(dt: datetime) -> Path:
+    date_str = dt.strftime("%Y-%m-%d")
+    hour_str = dt.strftime("%Y-%m-%d_%H-00")
+    return SNAPSHOTS_DIR / date_str / f"telegram_{hour_str}.json"
 
 
-def load_existing_data():
-    if os.path.exists(json_file):
-        with open(json_file, "r", encoding="utf-8") as f:
+def load_snapshot(path: Path) -> list:
+    if path.exists():
+        with open(path,"r",encoding="utf-8") as f:
             return json.load(f)
     return []
 
 
-def parse_message_date(date_str):
-    return datetime.fromisoformat(date_str)
+def save_snapshot(path: Path, messages: list):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(messages, f, ensure_ascii=False, indent=4)
 
 
-def get_last_dates_by_channel(existing_data):
-    last_dates = {}
+def get_last_date() -> datetime | None:
+    if not PARQUET_PATH.exists():
+        print(f"final_merged_dataset.parquet not found: {PARQUET_PATH}")
+        return None
 
-    for item in existing_data:
-        channel = item.get("channel")
-        date_str = item.get("date")
+    df = pd.read_parquet(PARQUET_PATH, columns=[PARQUET_DATE_COLUMN])
+    last_date = df[PARQUET_DATE_COLUMN].max()
 
-        if not channel or not date_str:
+    if last_date.tzinfo is None:
+        last_date = last_date.tz_localize(KYIV_TZ)
+    else:
+        last_date = last_date.tz_convert(KYIV_TZ)
+
+    return last_date.to_pydatetime()
+
+
+def get_missing_hours(last_date: datetime, now: datetime) -> list[datetime]:
+    start = last_date.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+
+    hours = []
+    iter_hour = start
+    while iter_hour < current_hour:
+        hours.append(iter_hour)
+        iter_hour += timedelta(hours=1)
+
+    return hours
+
+
+async def collect_messages_for_period(client: TelegramClient, date_from: datetime, date_to: datetime) -> list[dict]:
+    messages = []
+
+    for channel in channels:
+        print(f"  {channel}: collecting from {date_from} to {date_to}")
+
+        async for message in client.iter_messages(channel, limit=None,offset_date=date_to):
+            if not message.text:
+                continue
+
+            msg_date = message.date
+            if msg_date.tzinfo is None:
+                msg_date = msg_date.replace(tzinfo=timezone.utc)
+            msg_date = msg_date.astimezone(KYIV_TZ)
+
+            if msg_date < date_from:
+                break
+
+            messages.append({
+                "date": msg_date.isoformat(),
+                "channel": channel,
+                "message": message.text
+            })
+
+    return messages
+
+
+async def run_backfill(client: TelegramClient, missing_hours: list[datetime]):
+    total = len(missing_hours)
+    print(f"\nNeed to fill {total} hours...")
+
+    for i, hour_start in enumerate(missing_hours):
+        hour_end = hour_start + timedelta(hours=1)
+        snapshot_path = get_snapshot_path(hour_start)
+
+        if snapshot_path.exists():
+            print(f"  [{i+1}/{total}] Already exists, skipping: {snapshot_path}")
             continue
 
-        msg_date = parse_message_date(date_str)
+        print(f"  [{i+1}/{total}] Collecting: {hour_start.strftime('%Y-%m-%d %H:00')}...")
 
-        if channel not in last_dates or msg_date > last_dates[channel]:
-            last_dates[channel] = msg_date
+        messages = await collect_messages_for_period(client, hour_start, hour_end)
 
-    return last_dates
+        save_snapshot(snapshot_path, messages)
+        print(f"    Saved {len(messages)} messages to {snapshot_path}")
+
+
+async def run_current_hour(client: TelegramClient, now: datetime):
+    hour_start = now.replace(minute=0, second=0, microsecond=0)
+    hour_end = now
+
+    snapshot_path = get_snapshot_path(hour_start)
+
+    print(f"\n Collecting from {hour_start.strftime('%Y-%m-%d %H:00')}...")
+
+    existing = load_snapshot(snapshot_path)
+    existing_keys = {(m["channel"], m["date"]) for m in existing}
+
+    new_messages = await collect_messages_for_period(client, hour_start, hour_end)
+
+    unique_new = [
+        m for m in new_messages
+        if (m["channel"], m["date"]) not in existing_keys
+    ]
+
+    all_messages = existing + unique_new
+    all_messages.sort(key=lambda x: (x["channel"], x["date"]))
+
+    save_snapshot(snapshot_path, all_messages)
+    print(f"  Saved {len(all_messages)} messages ({len(unique_new)} new)")
 
 
 async def main():
-    existing_data = load_existing_data()
-    last_dates = get_last_dates_by_channel(existing_data)
+    now = datetime.now(KYIV_TZ)
+    last_date = get_last_date()
+    print(f"START: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    new_messages = []
-    counter = 0
+    if last_date is None:
+        print("final_merged_dataset.parquet is missing. Collecting current hour only")
+        missing_hours = []
+    else:
+        print(f"Last date in final_merged_dataset.parquet: {last_date.strftime('%Y-%m-%d %H:%M')}")
+        missing_hours = get_missing_hours(last_date, now)
 
-    async with TelegramClient("telegram_session", api_id, api_hash) as client:
-        for channel in channels:
-            channel_start_date = last_dates.get(channel, default_start_date)
+    async with TelegramClient(SESSION_NAME, api_id, api_hash) as client:
+        if missing_hours:
+            await run_backfill(client, missing_hours)
+        else:
+            print("No missing hours")
 
-            print(f"\nChannel: {channel}")
-            print(f"Loading messages after: {channel_start_date}")
+        await run_current_hour(client, now)
 
-            # reverse=True -> від старих до нових
-            async for message in client.iter_messages(channel, limit=None, reverse=True):
-                if not message.text:
-                    continue
-
-                msg_date = message.date
-                if msg_date.tzinfo is None:
-                    msg_date = msg_date.replace(tzinfo=timezone.utc)
-
-                if msg_date <= channel_start_date:
-                    continue
-
-                new_messages.append({
-                    "date": msg_date.isoformat(),
-                    "channel": channel,
-                    "message": message.text
-                })
-
-                counter += 1
-
-                if counter % 1000 == 0:
-                    print(f"{counter} new messages downloaded...")
-
-    all_messages = existing_data + new_messages
-
-    seen = set()
-    unique_messages = []
-
-    for msg in all_messages:
-        key = (msg["channel"], msg["date"], msg["message"])
-        if key not in seen:
-            seen.add(key)
-            unique_messages.append(msg)
-
-    unique_messages.sort(key=lambda x: (x["channel"], x["date"]))
-
-    with open(json_file, "w", encoding="utf-8") as f:
-        json.dump(unique_messages, f, ensure_ascii=False, indent=4)
-
-    print(f"\nFinished.")
-    print(f"Added {len(new_messages)} new messages.")
-    print(f"Total saved: {len(unique_messages)}")
-    print(f"Data saved to {json_file}")
-
+    print("\nScript finished running.")
 
 asyncio.run(main())
