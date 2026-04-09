@@ -8,7 +8,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from collect_alarms_hourly import save_result, DISTRICT_TO_OBLAST, date_alarm, API_KEY
 
-base_isw_url = ""
+base_isw_url = "https://understandingwar.org/research/russia-ukraine"
 base_alarms_url = API_KEY
 
 REGIONS = {
@@ -164,6 +164,7 @@ def save_isw_in_period(date_start: datetime, date_end: datetime) -> None:
             current_hour = current_day + timedelta(hours=hour)
             save_isw(article, current_hour)
 
+        print(f"saved isw for {current_day}")
         current_day += timedelta(days=1)
 
 
@@ -392,7 +393,7 @@ def save_weather_in_period(date_start: datetime, date_end: datetime) -> None:
     while current <= date_end:
         all_regions_data: dict = {}
 
-        for region_id, (region_name, lat, lon) in REGIONS.items():
+        for region_id, (region_name, lat, lon) in REGIONS_COORDS.items():
             try:
                 hourly = get_day_weather(lat, lon, current)
                 all_regions_data[region_id] = hourly
@@ -405,6 +406,7 @@ def save_weather_in_period(date_start: datetime, date_end: datetime) -> None:
             snapshot = build_hourly_snapshot(current, hour, all_regions_data)
             save_hourly_snapshot(snapshot, current, hour, base_dir)
 
+        print(f"saved weather for {current}")
         current += timedelta(days=1)
 
 def save_everything(date_start:datetime):
