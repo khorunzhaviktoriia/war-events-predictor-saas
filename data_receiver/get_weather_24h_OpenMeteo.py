@@ -3,6 +3,7 @@ import json
 import requests
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import time
 
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
@@ -64,6 +65,26 @@ WMO_CODE_MAP = {
     99: ("Thunderstorm",            "thunder-rain"),
 }
 
+def _get_with_retry(url, params=None, timeout=60, max_retries=3):
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                return r
+
+            print(f"status {r.status_code}, attempt {attempt}/{max_retries}")
+            last_error = Exception(f"HTTP {r.status_code}")
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            last_error = e
+            print(f"{type(e).__name__}, attempt {attempt}/{max_retries}")
+
+        time.sleep(5 * attempt)  # 5s, 10s, 15s
+
+    raise Exception(f"Failed after {max_retries} retries: {url}. Last error: {last_error}")
+
 def wmo_to_conditions(code, hour: int):
     conditions, icon = WMO_CODE_MAP.get(code, ("Unknown", "cloudy"))
     is_night = hour < 6 or hour >= 21
@@ -72,20 +93,15 @@ def wmo_to_conditions(code, hour: int):
                    .replace("partly-cloudy-day", "partly-cloudy-night")
     return conditions, icon
 
-def get_weather(lat: float, lon: float) -> list[dict]:
+def get_weather(lat: float, lon: float, forecast_start: dt.datetime) -> list[dict]:
     url = "https://api.open-meteo.com/v1/forecast"
 
-    now_kyiv = dt.datetime.now(KYIV_TZ)
-    today_kyiv = now_kyiv.date()
+    today_kyiv = forecast_start.date()
     end_date = today_kyiv + dt.timedelta(days=2)
 
-    next_full_hour_kyiv = (now_kyiv + dt.timedelta(hours=1)).replace(
-        minute=0, second=0, microsecond=0
-    )
-
     params = {
-        "latitude":           lat,
-        "longitude":          lon,
+        "latitude": lat,
+        "longitude": lon,
         "hourly": ",".join([
             "temperature_2m",
             "apparent_temperature",
@@ -104,25 +120,21 @@ def get_weather(lat: float, lon: float) -> list[dict]:
             "uv_index",
             "weathercode",
         ]),
-        "start_date":         today_kyiv.strftime("%Y-%m-%d"),
-        "end_date":           end_date.strftime("%Y-%m-%d"),
-        "timezone":           "Europe/Kiev",   # Open-Meteo returns hours in Kyiv time
-        "wind_speed_unit":    "kmh",
+        "start_date": today_kyiv.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d"),
+        "timezone": "Europe/Kiev",   # Open-Meteo returns hours in Kyiv time
+        "wind_speed_unit": "kmh",
         "precipitation_unit": "mm",
     }
 
-    response = requests.get(url, params=params, timeout=30)
-    if response.status_code != 200:
-        raise Exception(f"Open-Meteo {response.status_code}: {response.text[:200]}")
-
+    response = _get_with_retry(url, params=params, timeout=60, max_retries=3)
     hourly = response.json().get("hourly", {})
     times = hourly.get("time", [])
 
     next_24 = []
     for i, time_str in enumerate(times):
-        # Open-Meteo returns times in the requested timezone (Kyiv)
         hour_dt_kyiv = dt.datetime.strptime(time_str, "%Y-%m-%dT%H:%M").replace(tzinfo=KYIV_TZ)
-        if hour_dt_kyiv >= next_full_hour_kyiv:
+        if hour_dt_kyiv >= forecast_start:
             next_24.append(_build_vc_hour(hourly, i, hour_dt_kyiv))
         if len(next_24) == 24:
             break
@@ -179,31 +191,34 @@ def _build_vc_hour(hourly: dict, i: int, hour_dt: dt.datetime) -> dict:
         "source":         "open-meteo",
     }
 
-def get_weather_for_all_regions() -> dict:
+def get_weather_for_all_regions(forecast_start: dt.datetime) -> dict:
     result = {}
     for region_id, (location, lat, lon) in REGIONS_COORDS.items():
         try:
-            result[region_id] = get_weather(lat, lon)
+            result[region_id] = get_weather(lat, lon, forecast_start)
         except Exception as e:
             print(f"error for [{region_id:02d}] {location}: {e}")
             result[region_id] = []
     return result
 
-def save_weather_data(data: dict, date: dt.datetime):
+def save_weather_data(data: dict, forecast_start: dt.datetime):
     base_dir = Path(__file__).resolve().parent.parent
 
-    date_str = date.strftime("%Y-%m-%d")
-    time_str = date.replace(minute=0).strftime("%H-%M")
+    date_str = forecast_start.strftime("%Y-%m-%d")
+    hour_str = forecast_start.replace(minute=0, second=0, microsecond=0).strftime("%H-%M")
 
-    dir_path = base_dir / "data" / "raw_snapshots" / "weather_forecast" / date_str
+    dir_path = base_dir / "data" / "raw_snapshots" / "weather_forecast_24h" / date_str
     dir_path.mkdir(parents=True, exist_ok=True)
 
-    file_path = dir_path / f"weather_{date_str}_{time_str}.json"
+    file_path = dir_path / f"weather_forecast_{date_str}_{hour_str}.json"
 
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
+    print(f"saved forecast {file_path.name}")
+
 if __name__ == "__main__":
-    result = get_weather_for_all_regions()
-    today = dt.datetime.now(KYIV_TZ)
-    save_weather_data(result, today)
+    now_kyiv = dt.datetime.now(KYIV_TZ)
+    forecast_start = now_kyiv.replace(minute=0, second=0, microsecond=0)
+    result = get_weather_for_all_regions(forecast_start)
+    save_weather_data(result, forecast_start)

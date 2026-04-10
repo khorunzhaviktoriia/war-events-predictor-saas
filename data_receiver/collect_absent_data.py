@@ -7,11 +7,11 @@ import requests
 import time
 import pandas as pd
 from bs4 import BeautifulSoup
-from collect_alarms_hourly import save_result, DISTRICT_TO_OBLAST, date_alarm, API_KEY
 from get_weather_24h_OpenMeteo import REGIONS_COORDS, WMO_CODE_MAP, wmo_to_conditions
 
 base_isw_url = "https://understandingwar.org/research/russia-ukraine"
-base_alarms_url = API_KEY
+API_KEY = ''
+BASE_URL = "https://api.ukrainealarm.com/api/v3"
 
 REGIONS = {
     2:  ("Vinnytsia",       "Vinnytsia, Ukraine"),
@@ -40,23 +40,80 @@ REGIONS = {
     26: ("Kyiv",            "Kyiv, Ukraine"),
 }
 
-def collect_isw(date: datetime) -> dict:
-    date_str = f"{date.strftime('%B').lower()}-{date.day}-{date.year}"
-    url = f"{base_isw_url}/russian-offensive-campaign-assessment-{date_str}/"
+DISTRICT_TO_OBLAST = {
+    36: 2, 37: 2, 33: 2, 32: 2, 35: 2, 34: 2,        # Vinnytsia
+    39: 3, 38: 3, 40: 3, 41: 3,                        # Volyn
+    43: 4, 48: 4, 44: 4, 45: 4, 47: 4, 46: 4, 42: 4,  # Dnipropetrovsk
+    49: 5, 55: 5, 53: 5, 52: 5, 50: 5, 54: 5, 51: 5, 56: 5,  # Donetsk
+    58: 6, 59: 6, 60: 6, 57: 6,                        # Zhytomyr
+    63: 7, 66: 7, 61: 7, 62: 7, 64: 7, 65: 7,          # Zakarpattia
+    147: 8, 146: 8, 145: 8, 148: 8, 149: 8,            # Zaporizhzhia
+    68: 9, 72: 9, 69: 9, 70: 9, 67: 9, 71: 9,          # Ivano-Frankivsk
+    77: 10, 78: 10, 73: 10, 74: 10, 75: 10, 76: 10, 79: 10,  # Kyiv Oblast
+    81: 11, 80: 11, 82: 11, 83: 11,                    # Kirovohrad
+    92: 13, 90: 13, 93: 13, 89: 13, 94: 13, 88: 13, 91: 13,  # Lviv
+    96: 14, 97: 14, 98: 14, 95: 14,                    # Mykolaiv
+    103: 15, 100: 15, 105: 15, 104: 15, 101: 15, 99: 15, 102: 15,  # Odesa
+    107: 16, 106: 16, 109: 16, 108: 16,                # Poltava
+    110: 17, 113: 17, 111: 17, 112: 17,                # Rivne
+    115: 18, 118: 18, 116: 18, 117: 18, 114: 18,       # Sumy
+    121: 19, 120: 19, 119: 19,                          # Ternopil
+    127: 20, 124: 20, 126: 20, 122: 20, 128: 20, 125: 20, 123: 20,  # Kharkiv
+    130: 21, 133: 21, 131: 21, 132: 21, 129: 21,       # Kherson
+    135: 22, 136: 22, 134: 22,                          # Khmelnytskyi
+    150: 23, 151: 23, 152: 23, 153: 23,                # Cherkasy
+    139: 24, 137: 24, 138: 24,                          # Chernivtsi
+    143: 25, 140: 25, 142: 25, 141: 25, 144: 25,       # Chernihiv
+    31: 26,                                             # Kyiv city
+}
+
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
+
+def _get_with_retry(url, params=None, timeout=60, max_retries=3):
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                return r
+
+            print(f"status {r.status_code}, attempt {attempt}/{max_retries}")
+            last_error = Exception(f"HTTP {r.status_code}")
+
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout) as e:
+            last_error = e
+            print(f"{type(e).__name__}, attempt {attempt}/{max_retries}")
+
+        time.sleep(5 * attempt)  # 5s, 10s, 15s
+
+    raise Exception(f"Failed after {max_retries} retries: {url}. Last error: {last_error}")
+
+
+def collect_isw(date: datetime) -> dict | None:
+    date_slug = f"{date.strftime('%B').lower()}-{date.day}-{date.year}"
+    url = f"{base_isw_url}/russian-offensive-campaign-assessment-{date_slug}/"
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
-    response = requests.get(url, headers=headers, timeout=30)
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+    except requests.RequestException as e:
+        print(f"RequestError: {e}")
+        return None
 
     if response.status_code != 200:
-        return {
-            "date": date.strftime("%Y-%m-%d"),
-            "title": None,
-            "url": url,
-            "text": None
-        }
+        print(f"ISW report not found for {date.strftime('%Y-%m-%d')} (status {response.status_code})")
+        return None
 
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -64,17 +121,16 @@ def collect_isw(date: datetime) -> dict:
     title = title_tag.get_text(strip=True) if title_tag else None
 
     article = soup.find("article")
-
     if article is None:
         article = soup.find("main")
-
     if article is None:
         article = soup.body
 
-    if article is None:
-        full_text = None
-    else:
-        full_text = article.get_text("\n", strip=True)
+    full_text = article.get_text("\n", strip=True) if article is not None else None
+
+    if not title or not full_text:
+        print(f"Failed to parse ISW content for {date.strftime('%Y-%m-%d')}")
+        return None
 
     return {
         "date": date.strftime("%Y-%m-%d"),
@@ -83,16 +139,14 @@ def collect_isw(date: datetime) -> dict:
         "text": full_text
     }
 
-def save_isw(data: dict, date: datetime) -> None:
+def save_isw(data: dict, report_date: datetime) -> None:
     base_dir = Path(__file__).resolve().parent.parent
 
-    date_str = date.strftime("%Y-%m-%d")
-    hour_str = date.strftime("%H-%M")
-
+    date_str = report_date.strftime("%Y-%m-%d")
     dir_path = base_dir / "data" / "raw_snapshots" / "isw_reports" / date_str
     dir_path.mkdir(parents=True, exist_ok=True)
 
-    file_path = dir_path / f"isw_report_{date_str}_{hour_str}.json"
+    file_path = dir_path / f"isw_report_{date_str}.json"
 
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -104,24 +158,48 @@ def save_isw_in_period(date_start: datetime, date_end: datetime) -> None:
     while current_day <= last_day:
         article = collect_isw(current_day)
 
-        if current_day.date() == date_start.date():
-            start_hour = date_start.hour
+        if article is not None:
+            save_isw(article, current_day)
+            print(f"saved isw for {current_day.date()}")
         else:
-            start_hour = 0
+            print(f"no isw report yet for {current_day.date()}")
 
-        if current_day.date() == date_end.date():
-            end_hour = date_end.hour
-        else:
-            end_hour = 24
-
-        for hour in range(start_hour, end_hour):
-            current_hour = current_day + timedelta(hours=hour)
-            save_isw(article, current_hour)
-
-        print(f"saved isw for {current_day.date()} hours {start_hour}..{end_hour - 1}")
         current_day += timedelta(days=1)
 
 
+
+def date_alarm(date: datetime) -> json:
+    date_str = date.strftime("%Y%m%d")
+
+    while True:
+
+        response = requests.get(
+            f"{BASE_URL}/alerts/dateHistory",
+            headers={"Authorization": API_KEY},
+            params={"date": date_str}
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        else:
+            print(f"Error {response.status_code}. Trying again")
+            time.sleep(5)
+            continue
+
+def save_result(result: dict, hour: datetime) -> None:
+    base_dir = Path(__file__).resolve().parent.parent
+
+    date_str = hour.strftime("%Y-%m-%d")
+    time_str = hour.replace(minute=0, second=0).strftime("%H-%M")
+
+    dir_path = base_dir / "data" / "raw_snapshots" / "alarms_hourly" / date_str
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    file_path = dir_path / f"alarms_hour_{date_str}_{time_str}.json"
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, indent=4, ensure_ascii=False)
 
 def alarms_in_hour(alarms: dict, hour_start:datetime) -> dict:
     hour_end = hour_start + timedelta(hours=1)
@@ -199,7 +277,6 @@ def calc_feels_like(temp_c: float, rh: float, windspeed_kmh: float) -> float:
     return round(temp_c, 1)
 
 def get_day_weather(lat: float, lon: float, date: datetime.date) -> dict:
-
     date_str = date.strftime("%Y-%m-%d")
     url = "https://archive-api.open-meteo.com/v1/archive"
 
@@ -226,18 +303,13 @@ def get_day_weather(lat: float, lon: float, date: datetime.date) -> dict:
             "uv_index",               # -> uvindex
             "weathercode",            # -> conditions + icon
         ]),
-        "timezone":           "UTC",
+        "timezone":           "Europe/Kiev",
         "wind_speed_unit":    "kmh",   # VC uses km/h
         "precipitation_unit": "mm",
     }
 
-    response = requests.get(url, params=params, timeout=30)
-    if response.status_code == 200:
-        return response.json().get("hourly", {})
-    else:
-        raise Exception(
-            f"Open-Meteo {response.status_code} for ({lat},{lon}) on {date_str}: {response.text[:300]}"
-        )
+    response = _get_with_retry(url, params=params, timeout=60, max_retries=3)
+    return response.json().get("hourly", {})
 
 def build_vc_weather(hourly: dict, hour: int) -> dict:
 
@@ -270,14 +342,14 @@ def build_vc_weather(hourly: dict, hour: int) -> dict:
         elif wmo_code in (95, 96, 99):
             precip_type = ["rain"]
 
-    conditions, icon = wmo_to_conditions(wmo_code or 0, is_nighttime(hour))
+    conditions, icon = wmo_to_conditions(wmo_code or 0, hour)
 
     time_str = (hourly.get("time") or [])[hour] if hourly.get("time") else None
     epoch = None
     if time_str:
         try:
             epoch = int(datetime.strptime(time_str, "%Y-%m-%dT%H:%M").replace(
-                tzinfo=timezone.utc).timestamp())
+                tzinfo=KYIV_TZ).timestamp())
         except Exception:
             epoch = None
 
@@ -326,7 +398,7 @@ def build_hourly_snapshot(date: datetime.date, hour: int, all_regions_data: dict
 
 def save_hourly_snapshot(snapshot: dict, date: datetime.date, hour: int, base_dir: Path) -> None:
     date_str = date.strftime("%Y-%m-%d")
-    dir_path = base_dir / "data" / "raw_snapshots" / "weather_forecast" / date_str
+    dir_path = base_dir / "data" / "raw_snapshots" / "weather_historical" / date_str
     dir_path.mkdir(parents=True, exist_ok=True)
     file_path = dir_path / f"weather_{date_str}_{hour:02d}-00.json"
     with open(file_path, "w", encoding="utf-8") as f:
@@ -340,16 +412,22 @@ def save_weather_in_period(date_start: datetime, date_end: datetime) -> None:
 
     while current_day <= last_day:
         all_regions_data: dict = {}
+        failed_regions = []
 
         for region_id, (region_name, lat, lon) in REGIONS_COORDS.items():
             try:
                 hourly = get_day_weather(lat, lon, current_day.date())
                 all_regions_data[region_id] = hourly
             except Exception as e:
-                all_regions_data[region_id] = {}
                 print(f"error for {region_name} on {current_day.date()}: {e}")
+                failed_regions.append(region_name)
 
-            time.sleep(0.1)
+            time.sleep(1.0)
+
+        if failed_regions:
+            print(f"skip save for {current_day.date()} because failed regions: {failed_regions}")
+            current_day += timedelta(days=1)
+            continue
 
         if current_day.date() == date_start.date():
             start_hour = date_start.hour
@@ -369,7 +447,7 @@ def save_weather_in_period(date_start: datetime, date_end: datetime) -> None:
         current_day += timedelta(days=1)
 
 def save_everything(date_start:datetime):
-    date_end = datetime.now().replace(minute=0, second=0)
+    date_end = datetime.now(KYIV_TZ).replace(minute=0, second=0, microsecond=0)
 
     save_isw_in_period(date_start, date_end)
     save_alarms_in_period(date_start, date_end)
@@ -380,6 +458,9 @@ if __name__ == "__main__":
     data_path = base_dir / "data" / "final_merged_dataset.parquet"
     df = pd.read_parquet(data_path)
 
-    first_date = df["datetime_hour"].max() + timedelta(days=1)
+    first_date = df["datetime_hour"].max()
+    if first_date.tzinfo is None:
+        first_date = first_date.replace(tzinfo=KYIV_TZ)
+    first_date = first_date + timedelta(hours=1)
 
     save_everything(first_date)
