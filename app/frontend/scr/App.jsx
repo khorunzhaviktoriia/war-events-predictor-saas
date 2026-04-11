@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import UkraineMap from "./UkraineMap";
 
+const API_BASE_URL = "http://192.168.0.101:8000";
+
 function App() {
   const [region, setRegion] = useState("all");
   const [regions, setRegions] = useState([]);
@@ -17,7 +19,7 @@ function App() {
   useEffect(() => {
     const fetchRegions = async () => {
       try {
-        const response = await fetch("http://localhost:8000/regions");
+        const response = await fetch(`${API_BASE_URL}/regions`);
 
         if (!response.ok) {
           throw new Error("Failed to get list of regions");
@@ -25,6 +27,7 @@ function App() {
 
         const result = await response.json();
         setRegions(result);
+
       } catch (err) {
         console.error(err);
       }
@@ -38,9 +41,7 @@ function App() {
       setLoading(true);
       setError("");
 
-      const response = await fetch(
-        `http://localhost:8000/forecast?region=${encodeURIComponent(region)}`
-      );
+      const response = await fetch(`${API_BASE_URL}/forecast?region=${encodeURIComponent(region)}`);
 
       if (!response.ok) {
         throw new Error("Failed to get forecast");
@@ -49,7 +50,7 @@ function App() {
       const result = await response.json();
       setData(result);
 
-      if (result?.regions_forecast) {
+      if (!selectedTime && result?.regions_forecast) {
         const firstRegion = Object.values(result.regions_forecast)[0];
         const times = firstRegion ? Object.keys(firstRegion) : [];
         if (times.length > 0) {
@@ -68,9 +69,7 @@ function App() {
       setLoading(true);
       setError("");
 
-      const response = await fetch("http://localhost:8000/forecast/update", {
-        method: "POST"
-      });
+      const response = await fetch(`${API_BASE_URL}/forecast/update`, { method: "POST" });
 
       if (!response.ok) {
         throw new Error("Failed to update forecast");
@@ -89,6 +88,11 @@ function App() {
     data?.regions_forecast
       ? Object.keys(Object.values(data.regions_forecast)[0] || {})
       : [];
+
+  console.log("data:", data);
+  console.log("availableTimes:", availableTimes);
+  console.log("region:", region);
+  console.log("error:", error);
 
   return (
     <div className={`container ${theme}`}>
