@@ -6,8 +6,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-api_id = 12345678
-api_hash = "YOUR_API_HASH"
+api_id = 0000
+api_hash = ""
 
 channels = [
     "DeepStateUA",
@@ -148,7 +148,7 @@ async def main():
     print(f"START: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
     if last_date is None:
-        print("final_merged_dataset.parquet is missing. Collecting current hour only")
+        print("final_merged_dataset.parquet is missing. No backfill source.")
         missing_hours = []
     else:
         print(f"Last date in final_merged_dataset.parquet: {last_date.strftime('%Y-%m-%d %H:%M')}")
@@ -158,9 +158,7 @@ async def main():
         if missing_hours:
             await run_backfill(client, missing_hours)
         else:
-            print("No missing hours")
-
-        await run_current_hour(client, now)
+            print("No missing full hours")
 
     print("\nScript finished running.")
 

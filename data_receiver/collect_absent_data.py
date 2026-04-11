@@ -24,6 +24,7 @@ base_isw_url = "https://understandingwar.org/research/russia-ukraine"
 API_KEY = ''
 BASE_URL = "https://api.ukrainealarm.com/api/v3"
 HISTORY_URL = "https://archive-api.open-meteo.com/v1/archive"
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 REGIONS = {
     2:  ("Vinnytsia",       "Vinnytsia, Ukraine"),
@@ -127,8 +128,9 @@ def collect_isw(date: datetime) -> dict | None:
         "date": date.strftime("%Y-%m-%d"),
         "title": title,
         "url": url,
-        "text": full_text
+        "text": full_text,
     }
+
 
 def save_isw(data: dict, report_date: datetime) -> None:
     base_dir = Path(__file__).resolve().parent.parent
@@ -138,17 +140,18 @@ def save_isw(data: dict, report_date: datetime) -> None:
     dir_path.mkdir(parents=True, exist_ok=True)
 
     file_path = dir_path / f"isw_report_{date_str}.json"
-
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-def save_isw_in_period(date_start: datetime, date_end: datetime) -> None:
+
+def save_isw_in_period(date_start: datetime) -> None:
+    date_end = datetime.now(KYIV_TZ).replace(minute=0, second=0, microsecond=0)
+
     current_day = date_start.replace(hour=0, minute=0, second=0, microsecond=0)
     last_day = date_end.replace(hour=0, minute=0, second=0, microsecond=0)
 
     while current_day <= last_day:
         article = collect_isw(current_day)
-
         if article is not None:
             save_isw(article, current_day)
             print(f"saved isw for {current_day.date()}")
@@ -163,20 +166,17 @@ def date_alarm(date: datetime) -> json:
     date_str = date.strftime("%Y%m%d")
 
     while True:
-
         response = requests.get(
             f"{BASE_URL}/alerts/dateHistory",
             headers={"Authorization": API_KEY},
-            params={"date": date_str}
+            params={"date": date_str},
         )
-
         if response.status_code == 200:
-            data = response.json()
-            return data
+            return response.json()
         else:
             print(f"Error {response.status_code}. Trying again")
             time.sleep(5)
-            continue
+
 
 def save_result(result: dict, hour: datetime) -> None:
     base_dir = Path(__file__).resolve().parent.parent
@@ -188,9 +188,9 @@ def save_result(result: dict, hour: datetime) -> None:
     dir_path.mkdir(parents=True, exist_ok=True)
 
     file_path = dir_path / f"alarms_hour_{date_str}_{time_str}.json"
-
-    with open(file_path, 'w', encoding='utf-8') as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=4, ensure_ascii=False)
+
 
 def alarms_in_hour(alarms: list, hour_start: datetime) -> list:
     hour_end = hour_start + timedelta(hours=1)
@@ -224,18 +224,29 @@ def alarms_in_hour(alarms: list, hour_start: datetime) -> list:
 
     return rows
 
-def save_alarms_in_period(date_start:datetime, date_end:datetime) -> None:
-    date_start = date_start.replace(tzinfo=ZoneInfo("Europe/Kyiv"))
-    current = date_start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    end = date_end.replace(tzinfo=ZoneInfo("Europe/Kyiv")).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+def save_alarms_in_period(date_start: datetime) -> None:
+    date_end = datetime.now(KYIV_TZ).replace(minute=0, second=0, microsecond=0)
+
+    current = (
+        date_start
+        .replace(tzinfo=KYIV_TZ if date_start.tzinfo is None else date_start.tzinfo)
+        .astimezone(timezone.utc)
+        .replace(minute=0, second=0, microsecond=0)
+    )
+    end = (
+        date_end
+        .astimezone(timezone.utc)
+        .replace(minute=0, second=0, microsecond=0)
+    )
 
     current_date = current.date()
     alarms_current = date_alarm(current)
     print(f"success! saving {current.date()}")
 
-    while current <  end:
+    while current < end:
         alarms = alarms_in_hour(alarms_current, current)
-        save_result(alarms, current.astimezone(ZoneInfo("Europe/Kyiv")))
+        save_result(alarms, current.astimezone(KYIV_TZ))
 
         current += timedelta(hours=1)
 
@@ -247,14 +258,16 @@ def save_alarms_in_period(date_start:datetime, date_end:datetime) -> None:
             print(f"saving {current.date()}")
 
 
-def get_day_weather(lat: float, lon: float, date_value: datetime.date) -> tuple[dict, dict]:
-    date_str = date_value.strftime("%Y-%m-%d")
+
+def get_day_weather(lat: float, lon: float, day) -> tuple[dict, dict]:
+    today = datetime.now(KYIV_TZ).date()
+    day_str = day.strftime("%Y-%m-%d")
 
     params = {
         "latitude": lat,
         "longitude": lon,
-        "start_date": date_str,
-        "end_date": date_str,
+        "start_date": day_str,
+        "end_date": day_str,
         "hourly": ",".join(HOURLY_VARS),
         "daily": ",".join(DAILY_VARS),
         "timezone": "Europe/Kyiv",
@@ -264,11 +277,25 @@ def get_day_weather(lat: float, lon: float, date_value: datetime.date) -> tuple[
         "cell_selection": "land",
     }
 
-    response = _get_with_retry(HISTORY_URL, params=params, timeout=60, max_retries=5)
-    payload = response.json()
-    return payload.get("hourly", {}), payload.get("daily", {})
+    if day == today:
+        url = FORECAST_URL
+        params["forecast_days"] = 1
+        params["past_days"] = 0
+    else:
+        url = HISTORY_URL
 
-def build_hourly_snapshot(date_value: datetime.date, hour: int, all_regions_data: dict) -> dict:
+    response = _get_with_retry(url, params=params, timeout=60, max_retries=5)
+    payload = response.json()
+    hourly = payload.get("hourly", {})
+    daily = payload.get("daily", {})
+
+    if not hourly.get("time"):
+        print(f"no weather hours for {day_str} from {url}")
+
+    return hourly, daily
+
+
+def build_hourly_snapshot(date_value, hour: int, all_regions_data: dict) -> dict:
     regions_list = []
 
     for region_id, meta in REGION_META.items():
@@ -302,7 +329,8 @@ def build_hourly_snapshot(date_value: datetime.date, hour: int, all_regions_data
         "regions": regions_list,
     }
 
-def save_hourly_snapshot(snapshot: dict, date_value: datetime.date, hour: int, base_dir: Path) -> None:
+
+def save_hourly_snapshot(snapshot: dict, date_value, hour: int, base_dir: Path) -> None:
     date_str = date_value.strftime("%Y-%m-%d")
     dir_path = base_dir / "data" / "raw_snapshots" / "weather_historical" / date_str
     dir_path.mkdir(parents=True, exist_ok=True)
@@ -311,65 +339,69 @@ def save_hourly_snapshot(snapshot: dict, date_value: datetime.date, hour: int, b
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, indent=2, ensure_ascii=False)
 
-def save_weather_in_period(date_start: datetime, date_end: datetime) -> None:
+
+def save_weather_in_period(date_start: datetime) -> None:
+    date_end = datetime.now(KYIV_TZ).replace(minute=0, second=0, microsecond=0)
     base_dir = Path(__file__).resolve().parent.parent
 
-    current_day = date_start.replace(hour=0, minute=0, second=0, microsecond=0)
-    last_day = date_end.replace(hour=0, minute=0, second=0, microsecond=0)
+    current_date = date_start.date()
+    last_date = date_end.date()
+    print(f"weather range: {current_date} -> {last_date}, date_end hour: {date_end.hour}")
 
-    while current_day <= last_day:
+    while current_date <= last_date:
+        print(f"weather day: {current_date}")
         all_regions_data: dict = {}
-        failed_regions = []
 
         for region_id, (_, lat, lon) in REGIONS_COORDS.items():
             try:
-                hourly, daily = get_day_weather(lat, lon, current_day.date())
+                hourly, daily = get_day_weather(lat, lon, current_date)
                 full_rows = _build_full_hour_rows(hourly)
                 daily_lookup = _build_daily_lookup(daily)
                 daily_agg = _build_daily_aggregates(full_rows)
-
                 all_regions_data[region_id] = {
                     "full_rows": full_rows,
                     "daily_lookup": daily_lookup,
                     "daily_agg": daily_agg,
                 }
-
             except Exception as exc:
                 region_name = REGION_META[region_id]["city_name"]
-                print(f"error for {region_name} on {current_day.date()}: {exc}")
-                failed_regions.append(region_name)
-
+                print(f"error for {region_name} on {current_date}: {exc}")
+                all_regions_data[region_id] = {
+                    "full_rows": [],
+                    "daily_lookup": {},
+                    "daily_agg": {},
+                }
             time.sleep(0.4)
 
-        if failed_regions:
-            print(f"skip save for {current_day.date()} because failed regions: {failed_regions}")
-            current_day += timedelta(days=1)
+        start_hour = date_start.hour if current_date == date_start.date() else 0
+        end_hour = date_end.hour if current_date == date_end.date() else 24
+
+        if end_hour <= start_hour:
+            print(f"skipping {current_date}: no completed hours (start={start_hour}, end={end_hour})")
+            current_date += timedelta(days=1)
             continue
 
-        if current_day.date() == date_start.date():
-            start_hour = date_start.hour
-        else:
-            start_hour = 0
-
-        if current_day.date() == date_end.date():
-            end_hour = date_end.hour
-        else:
-            end_hour = 24
-
+        print(f"weather hours for {current_date}: {start_hour}..{end_hour - 1}")
         for hour in range(start_hour, end_hour):
-            snapshot = build_hourly_snapshot(current_day.date(), hour, all_regions_data)
-            save_hourly_snapshot(snapshot, current_day.date(), hour, base_dir)
+            snapshot = build_hourly_snapshot(current_date, hour, all_regions_data)
+            save_hourly_snapshot(snapshot, current_date, hour, base_dir)
 
-        print(f"saved weather for {current_day.date()} hours {start_hour}..{end_hour - 1}")
-        current_day += timedelta(days=1)
+        print(f"saved weather for {current_date} hours {start_hour}..{end_hour - 1}")
+        current_date += timedelta(days=1)
+
+    today_dir = base_dir / "data" / "raw_snapshots" / "weather_historical" / date_end.strftime("%Y-%m-%d")
+    if today_dir.exists():
+        count = len(list(today_dir.glob("*.json")))
+        print(f"weather historical files for today: {count}")
+    else:
+        print("weather historical directory for today was not created")
 
 
-def save_everything(date_start:datetime):
-    date_end = datetime.now(KYIV_TZ).replace(minute=0, second=0, microsecond=0)
+def save_everything(date_start: datetime) -> None:
+    save_isw_in_period(date_start)
+    save_alarms_in_period(date_start)
+    save_weather_in_period(date_start)
 
-    save_isw_in_period(date_start, date_end)
-    save_alarms_in_period(date_start, date_end)
-    save_weather_in_period(date_start, date_end)
 
 if __name__ == "__main__":
     base_dir = Path(__file__).resolve().parent.parent
