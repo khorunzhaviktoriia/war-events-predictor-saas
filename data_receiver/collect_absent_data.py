@@ -277,12 +277,7 @@ def get_day_weather(lat: float, lon: float, day) -> tuple[dict, dict]:
         "cell_selection": "land",
     }
 
-    if day == today:
-        url = FORECAST_URL
-        params["forecast_days"] = 1
-        params["past_days"] = 0
-    else:
-        url = HISTORY_URL
+    url = FORECAST_URL if day == today else HISTORY_URL
 
     response = _get_with_retry(url, params=params, timeout=60, max_retries=5)
     payload = response.json()
