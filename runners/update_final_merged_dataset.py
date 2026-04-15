@@ -1027,18 +1027,10 @@ def load_latest_weather_forecast(store: SnapshotStore) -> tuple[pd.DataFrame, st
 
     return df, latest
 
-def prepare_inference_bundle(final_parquet: Path, forecast_weather_df: pd.DataFrame, runtime_dir: Path, context_hours: int = 48) -> None:
-    hist = read_parquet_any(final_parquet)
-    hist["datetime_hour"] = pd.to_datetime(hist["datetime_hour"], errors="coerce")
-    context_start = forecast_weather_df["datetime_hour"].min() - pd.Timedelta(hours=context_hours)
-    hist_tail = hist[hist["datetime_hour"] >= context_start].copy()
-    hist_tail = hist_tail.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
-
+def save_forecast_runtime_inputs(forecast_weather_df: pd.DataFrame, runtime_dir: Path) -> None:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     forecast_path = runtime_dir / "weather_forecast_processed.parquet"
-    context_path = runtime_dir / "historical_context_tail.parquet"
     write_parquet_any(forecast_weather_df, forecast_path)
-    write_parquet_any(hist_tail, context_path)
 
 
 def run_historical_pipeline(paths: ProjectPaths) -> None:
@@ -1091,12 +1083,11 @@ def run_forecast_pipeline(paths: ProjectPaths) -> None:
     paths.runtime_dir.mkdir(parents=True, exist_ok=True)
 
     log(f"snapshots={paths.snapshots}")
-    log(f"final_parquet={paths.final_parquet}")
     log(f"runtime_dir={paths.runtime_dir}")
 
     forecast_weather, latest_ref = load_latest_weather_forecast(store)
     log(f"Using latest forecast snapshot: {latest_ref}")
-    prepare_inference_bundle(paths.final_parquet, forecast_weather, paths.runtime_dir)
+    save_forecast_runtime_inputs(forecast_weather, paths.runtime_dir)
 
 
 def main() -> None:
