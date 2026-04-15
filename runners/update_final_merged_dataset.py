@@ -77,42 +77,14 @@ WEATHER_DROP_COLUMNS = [
 ISW_TEXT_TOPLEVEL_COLUMNS = ["date", "title", "url", "text"]
 TELEGRAM_TEXT_TOPLEVEL_COLUMNS = ["date", "channel", "message"]
 
-VERBOSE = False
-
-
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-def banner(title: str) -> None:
-    if not VERBOSE:
-        return
-    line = "=" * 110
-    print(f"\n{line}\n{title}\n{line}")
 
 def log(msg: str) -> None:
     print(f"[{now_str()}] {msg}")
 
 def warn(msg: str) -> None:
     print(f"[{now_str()}] WARNING: {msg}")
-
-def preview_df(name: str, df: pd.DataFrame, n: int = 3, cols: int = 12) -> None:
-    if not VERBOSE:
-        return
-    banner(f"PREVIEW :: {name}")
-    log(f"shape={df.shape}")
-    log(f"columns={len(df.columns)}")
-    if "datetime_hour" in df.columns and not df.empty:
-        log(f"datetime_hour range: {df['datetime_hour'].min()} -> {df['datetime_hour'].max()}")
-    if "date" in df.columns and not df.empty:
-        log(f"date range: {df['date'].min()} -> {df['date'].max()}")
-    if "region_id" in df.columns:
-        log(f"unique regions: {df['region_id'].nunique()}")
-    if {"datetime_hour", "region_id"}.issubset(df.columns):
-        dup_count = int(df[["datetime_hour", "region_id"]].duplicated().sum())
-        log(f"duplicate (datetime_hour, region_id) rows: {dup_count}")
-    if len(df.columns):
-        shown_cols = list(df.columns[: min(cols, len(df.columns))])
-        print(df[shown_cols].head(n).to_string(index=False))
 
 @dataclass
 class ProjectPaths:
@@ -405,13 +377,12 @@ class TelegramTextPreprocessor:
 
 
 
-def preprocess_weather_delta(
+def preprocess_weather_new_rows(
     store: SnapshotStore,
     template_columns: list[str],
     completed_hour: pd.Timestamp,
     existing_max: pd.Timestamp | None,
 ) -> pd.DataFrame:
-    banner("LOAD :: raw weather_historical snapshots")
     files = store.list_json_files("weather_historical")
     if not files:
         raise FileNotFoundError("No weather_historical snapshot files were found.")
@@ -471,17 +442,15 @@ def preprocess_weather_delta(
     if existing_max is not None:
         df = df[df["datetime_hour"] > existing_max].copy()
     df = align_to_template_columns(df, template_columns)
-    preview_df("weather_delta_processed", df)
     return df
 
-def preprocess_alarms_delta(
+def preprocess_alarms_new_rows(
     store: SnapshotStore,
     template_columns: list[str],
     completed_hour: pd.Timestamp,
     existing_max: pd.Timestamp | None,
     region_dim: pd.DataFrame,
 ) -> pd.DataFrame:
-    banner("LOAD :: raw alarms_hourly snapshots")
     files = store.list_json_files("alarms_hourly")
     if not files:
         raise FileNotFoundError("No alarms_hourly snapshot files were found.")
@@ -532,16 +501,14 @@ def preprocess_alarms_delta(
     out = remove_spring_dst_hour(out, dt_col="datetime_hour")
     out = out.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     out = align_to_template_columns(out, template_columns)
-    preview_df("alarms_delta_processed", out)
     return out
 
-def preprocess_isw_delta(
+def preprocess_isw_new_rows(
     store: SnapshotStore,
     topic_columns: list[str],
     existing_max_date: pd.Timestamp | None,
     artifacts_dir: Path,
 ) -> pd.DataFrame:
-    banner("LOAD :: raw isw_reports snapshots")
     files = store.list_json_files("isw_reports")
     if not files:
         raise FileNotFoundError("No isw_reports snapshot files were found.")
@@ -569,7 +536,6 @@ def preprocess_isw_delta(
 
     if df.empty:
         out = pd.DataFrame(columns=["date", *topic_columns])
-        preview_df("isw_delta_processed", out)
         return out
 
     pre = ISWTextPreprocessor()
@@ -597,20 +563,18 @@ def preprocess_isw_delta(
     topic_df = pd.DataFrame(X_reduced, columns=topic_columns, index=df.index)
     out = pd.concat([df[["date"]].copy(), topic_df], axis=1)
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    preview_df("isw_delta_processed", out)
     return out
 
 def normalize_telegram_dates_to_local(series: pd.Series) -> pd.Series:
     dt = pd.to_datetime(series, utc=True, errors="coerce")
     return dt.dt.tz_convert(KYIV_TZ).dt.tz_localize(None)
 
-def preprocess_telegram_delta(
+def preprocess_telegram_new_rows(
     store: SnapshotStore,
     topic_columns: list[str],
     existing_max_dt: pd.Timestamp | None,
     artifacts_dir: Path,
 ) -> pd.DataFrame:
-    banner("LOAD :: raw telegram snapshots")
     files = store.list_json_files("telegram")
     if not files:
         raise FileNotFoundError("No telegram snapshot files were found.")
@@ -636,7 +600,6 @@ def preprocess_telegram_delta(
 
     if df.empty:
         out = pd.DataFrame(columns=["date", "channel", *topic_columns])
-        preview_df("telegram_delta_processed", out)
         return out
 
     df["message"] = df["message"].astype(str)
@@ -665,54 +628,46 @@ def preprocess_telegram_delta(
     topic_df = pd.DataFrame(X_reduced, columns=topic_columns, index=df.index)
     out = pd.concat([df[["date", "channel"]].copy(), topic_df], axis=1)
     out = out.drop_duplicates(keep="last").sort_values(["date", "channel"]).reset_index(drop=True)
-    preview_df("telegram_delta_processed", out)
     return out
 
-def load_weather_full(path: Path, delta_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    banner("LOAD :: full weather processed source")
+def load_weather_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
     df = load_csv_full(path)
     df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
     df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype(int)
     bool_cols = [c for c in df.columns if c.startswith("hour_conditions_simple_")]
     df = coerce_bool_columns(df, bool_cols)
     df = ensure_date_string_col(df, "day_datetime")
-    if delta_df is not None and not delta_df.empty:
-        df = pd.concat([df, delta_df], ignore_index=True)
+    if new_rows_df is not None and not new_rows_df.empty:
+        df = pd.concat([df, new_rows_df], ignore_index=True)
     df = remove_spring_dst_hour(df, dt_col="datetime_hour")
     df = df.sort_values(["datetime_hour", "region_id"]).drop_duplicates(["datetime_hour", "region_id"], keep="last").reset_index(drop=True)
-    preview_df("weather_full_for_rebuild", df)
     return df
 
-def load_alarms_full(path: Path, delta_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    banner("LOAD :: full alarms processed source")
+def load_alarms_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
     df = load_csv_full(path)
     df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
     df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype(int)
     df["alarm_active"] = pd.to_numeric(df["alarm_active"], errors="coerce").fillna(0).astype(int)
     df["alarm_minutes_in_hour"] = pd.to_numeric(df["alarm_minutes_in_hour"], errors="coerce").fillna(0.0)
-    if delta_df is not None and not delta_df.empty:
-        df = pd.concat([df, delta_df], ignore_index=True)
+    if new_rows_df is not None and not new_rows_df.empty:
+        df = pd.concat([df, new_rows_df], ignore_index=True)
     df = remove_spring_dst_hour(df, dt_col="datetime_hour")
     df = df.sort_values(["datetime_hour", "region_id"]).drop_duplicates(["datetime_hour", "region_id"], keep="last").reset_index(drop=True)
-    preview_df("alarms_full_for_rebuild", df)
     return df
 
-def load_isw_full(path: Path, delta_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    banner("LOAD :: full ISW processed source")
+def load_isw_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
     df = load_csv_full(path)
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    if delta_df is not None and not delta_df.empty:
-        df = pd.concat([df, delta_df], ignore_index=True)
+    if new_rows_df is not None and not new_rows_df.empty:
+        df = pd.concat([df, new_rows_df], ignore_index=True)
     df = df.sort_values("date").drop_duplicates(["date"], keep="last").reset_index(drop=True)
-    preview_df("isw_full_for_rebuild", df)
     return df
 
 def aggregate_telegram_hourly_from_csv(
     path: Path,
-    delta_df: pd.DataFrame | None = None,
+    new_rows_df: pd.DataFrame | None = None,
     chunksize: int = 100_000,
 ) -> pd.DataFrame:
-    banner("LOAD :: full Telegram processed source (hourly aggregation)")
     header_cols = read_csv_header(path)
     topic_cols = [c for c in header_cols if re.fullmatch(r"tg_topic_\d+", c)]
     if not topic_cols:
@@ -731,13 +686,13 @@ def aggregate_telegram_hourly_from_csv(
         sum_parts.append(chunk.groupby("datetime_hour", as_index=True)[topic_cols].sum())
         count_parts.append(chunk.groupby("datetime_hour").size().rename("msg_count"))
 
-    if delta_df is not None and not delta_df.empty:
-        delta = delta_df.copy()
-        delta["date"] = pd.to_datetime(delta["date"], errors="coerce")
-        delta = delta[delta["date"].notna()].copy()
-        delta["datetime_hour"] = delta["date"].dt.floor("h")
-        sum_parts.append(delta.groupby("datetime_hour", as_index=True)[topic_cols].sum())
-        count_parts.append(delta.groupby("datetime_hour").size().rename("msg_count"))
+    if new_rows_df is not None and not new_rows_df.empty:
+        new_rows = new_rows_df.copy()
+        new_rows["date"] = pd.to_datetime(new_rows["date"], errors="coerce")
+        new_rows = new_rows[new_rows["date"].notna()].copy()
+        new_rows["datetime_hour"] = new_rows["date"].dt.floor("h")
+        sum_parts.append(new_rows.groupby("datetime_hour", as_index=True)[topic_cols].sum())
+        count_parts.append(new_rows.groupby("datetime_hour").size().rename("msg_count"))
 
     if sum_parts:
         sums = pd.concat(sum_parts).groupby(level=0).sum().sort_index()
@@ -747,14 +702,11 @@ def aggregate_telegram_hourly_from_csv(
         hourly = hourly.sort_values("datetime_hour").reset_index(drop=True)
     else:
         hourly = pd.DataFrame(columns=["datetime_hour", *topic_cols])
-
-    preview_df("telegram_hourly_for_rebuild", hourly)
     return hourly
 
 
 
 def merge_historical_sources(weather_df: pd.DataFrame,alarms_df: pd.DataFrame,isw_df: pd.DataFrame,tg_hourly_df: pd.DataFrame) -> pd.DataFrame:
-    banner("MERGE :: full processed sources")
 
     df = weather_df.copy().sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     df = df.merge(
@@ -790,11 +742,9 @@ def merge_historical_sources(weather_df: pd.DataFrame,alarms_df: pd.DataFrame,is
         df[tg_cols] = df[tg_cols].fillna(0)
 
     df = df.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
-    preview_df("merged_before_features", df)
     return df
 
 def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
-    banner("FEATURE ENGINEERING :: full rebuild")
     df = df.copy().sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     g = df.groupby("region_id", sort=False)
 
@@ -900,21 +850,8 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 
     df_to_train = ensure_date_string_col(df_to_train, "day_datetime")
     df_to_train = df_to_train.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
-    preview_df("final_after_feature_engineering", df_to_train)
     return df_to_train
 
-
-def default_fill_value_from_dtype(dtype_str: str) -> Any:
-    dtype_str = str(dtype_str)
-    if "bool" in dtype_str:
-        return False
-    if "int" in dtype_str:
-        return 0
-    if "float" in dtype_str:
-        return 0.0
-    if "datetime" in dtype_str:
-        return pd.NaT
-    return None
 
 def cast_series_to_dtype(series: pd.Series, dtype_str: str) -> pd.Series:
     dtype_str = str(dtype_str)
@@ -994,7 +931,6 @@ def align_to_existing_schema(new_df: pd.DataFrame, existing_schema: dict[str, An
 
 
 def load_latest_weather_forecast(store: SnapshotStore) -> tuple[pd.DataFrame, str | Path]:
-    banner("LOAD :: forecast weather snapshots")
     files = store.list_json_files("weather_forecast_24h")
 
     if not files:
@@ -1023,7 +959,6 @@ def load_latest_weather_forecast(store: SnapshotStore) -> tuple[pd.DataFrame, st
     bool_cols = [c for c in df.columns if c.startswith("hour_conditions_simple_")]
     df = coerce_bool_columns(df, bool_cols)
     df = df.sort_values(["datetime_hour", "region_id"]).drop_duplicates(["datetime_hour", "region_id"], keep="last").reset_index(drop=True)
-    preview_df("weather_forecast_processed", df)
 
     return df, latest
 
@@ -1054,23 +989,38 @@ def run_historical_pipeline(paths: ProjectPaths) -> None:
         "telegram": csv_max_timestamp(paths.telegram_csv, "date"),
     }
 
-    weather_delta = preprocess_weather_delta(store, weather_cols, completed_hour_ts, source_max["weather"])
-    alarms_delta = preprocess_alarms_delta(store, alarms_cols, completed_hour_ts, source_max["alarms"], region_dim)
-    isw_delta = preprocess_isw_delta(store, isw_cols, source_max["isw"], paths.artifacts_dir)
-    telegram_delta = preprocess_telegram_delta(store, tg_cols, source_max["telegram"], paths.artifacts_dir)
+    log("Processing weather snapshots")
+    weather_new_rows = preprocess_weather_new_rows(store, weather_cols, completed_hour_ts, source_max["weather"])
+    log(f"Weather new rows: {len(weather_new_rows)}")
 
-    append_csv_rows(paths.weather_csv, weather_delta)
-    append_csv_rows(paths.alarms_csv, alarms_delta)
-    append_csv_rows(paths.isw_csv, isw_delta)
-    append_csv_rows(paths.telegram_csv, telegram_delta)
+    log("Processing alarms snapshots")
+    alarms_new_rows = preprocess_alarms_new_rows(store, alarms_cols, completed_hour_ts, source_max["alarms"], region_dim)
+    log(f"Alarms new rows: {len(alarms_new_rows)}")
+
+    log("Processing ISW snapshots")
+    isw_new_rows = preprocess_isw_new_rows(store, isw_cols, source_max["isw"], paths.artifacts_dir)
+    log(f"ISW new rows: {len(isw_new_rows)}")
+
+    log("Processing Telegram snapshots")
+    telegram_new_rows = preprocess_telegram_new_rows(store, tg_cols, source_max["telegram"], paths.artifacts_dir)
+    log(f"Telegram new rows: {len(telegram_new_rows)}")
+
+    append_csv_rows(paths.weather_csv, weather_new_rows)
+    append_csv_rows(paths.alarms_csv, alarms_new_rows)
+    append_csv_rows(paths.isw_csv, isw_new_rows)
+    append_csv_rows(paths.telegram_csv, telegram_new_rows)
     log("Processed source tables updated")
 
+    log("Loading updated processed sources")
     weather_full = load_weather_full(paths.weather_csv)
     alarms_full = load_alarms_full(paths.alarms_csv)
     isw_full = load_isw_full(paths.isw_csv)
     tg_hourly_full = aggregate_telegram_hourly_from_csv(paths.telegram_csv)
 
+    log("Merging processed sources")
     merged = merge_historical_sources(weather_full, alarms_full, isw_full, tg_hourly_full)
+
+    log("Applying feature engineering")
     rebuilt = apply_feature_engineering(merged)
     rebuilt_aligned, _ = align_to_existing_schema(rebuilt, existing_final_schema)
 
@@ -1082,12 +1032,14 @@ def run_forecast_pipeline(paths: ProjectPaths) -> None:
     store = SnapshotStore(paths.snapshots)
     paths.runtime_dir.mkdir(parents=True, exist_ok=True)
 
+    log("Preparing runtime forecast inputs")
     log(f"snapshots={paths.snapshots}")
     log(f"runtime_dir={paths.runtime_dir}")
 
     forecast_weather, latest_ref = load_latest_weather_forecast(store)
     log(f"Using latest forecast snapshot: {latest_ref}")
     save_forecast_runtime_inputs(forecast_weather, paths.runtime_dir)
+    log("weather_forecast_processed.parquet updated")
 
 
 def main() -> None:
