@@ -548,7 +548,7 @@ def main() -> None:
     threshold = float(model_artifact["threshold"])
     feature_names = list(model_artifact["feature_names"])
 
-    log("Loading historical context and exogenous sources")
+    log("Loading historical context")
     history = load_history(paths)
     forecast_weather = load_forecast_weather(paths)
     actual_weather = load_processed_weather(paths)
