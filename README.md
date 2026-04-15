@@ -1,4 +1,4 @@
-# Air Raid Alarm Forecasting in Ukraine
+# Air Alarm Forecasting in Ukraine
 
 This repository contains a practical pipeline for collecting data, updating a historical dataset, generating **next-24-hour air raid alarm forecasts**, and periodically retraining the production model.
 
