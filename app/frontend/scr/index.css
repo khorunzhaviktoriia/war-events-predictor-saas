@@ -76,13 +76,7 @@ body.dark .top-buttons button {
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-.card {
-  background: white;
-  border: 1px solid #6d615944;
-  border-radius: 18px;
-  padding: 20px;
+  min-width: 0;
 }
 
 body.dark .card {
@@ -108,17 +102,6 @@ body.dark .card {
 
 body.dark .card-title {
   color: #cbd5e1;
-}
-
-.map-shell {
-  background: #877f77;
-  border-radius: 14px;
-  padding: 16px;
-  overflow: hidden;
-}
-
-body.dark .map-shell {
-  background: #170d16;
 }
 
 .legend {
@@ -152,6 +135,10 @@ body.dark .legend-item {
 
 .legend-gray {
   background: #d9d9d9;
+}
+
+.legend-dark-red{
+  background: #670707
 }
 
 .time-scroll {
@@ -280,14 +267,6 @@ body.dark .map-shell {
   height: auto;
   display: block;
   max-width: 100%;
-}
-
-.left-column,
-.right-column {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
 }
 
 .card {

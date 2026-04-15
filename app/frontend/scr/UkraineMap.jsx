@@ -16,15 +16,18 @@ function UkraineMap({
   const pathRefs = useRef({});
   
   const getColor = (regionId) => {
-    const regionForecast = forecastData?.[String(regionId)];
-    const isAlarm = regionForecast?.[selectedTime];
+  const regionForecast = forecastData?.[String(regionId)];
+  const proba = regionForecast?.[selectedTime];
 
-    console.log("REGION ID:", regionId);
-    console.log("REGION FORECAST:", regionForecast);
-    console.log("ALARM VALUE:", isAlarm);
+  if (proba == null) return "#d9d9d9";
+  if (proba < 0.2) return "#dbeafe";
+  if (proba < 0.35) return "#86efac";
+  if (proba < 0.5) return "#fde68a";
+  if (proba < 0.65) return "#fdba74";
+  if (proba < 0.8) return "#fb7185";
 
-    return isAlarm ? "#d62828" : "#d9d9d9";
-  };
+  return "#b91c1c";
+};
 
   const getRegionName = (regionId) => {
     return regionNames?.[String(regionId)] || "";
@@ -137,7 +140,7 @@ function UkraineMap({
                     528.407,538.303 528.316,538.396 528.311,538.473 528.327,538.685 528.193,538.97 527.335,540.397 526.693,540.936 
                     524.78,541.338 524.327,541.911 523.981,542.729 523.419,543.706 522.929,544.215 521.502,545.21 520.864,545.421 519.887,545.57 
                     515.527,547.651 514.589,547.79 		"
-                    fill={selectedRegionId === "12" ? "#670707" : "#d62828"}
+                    fill={selectedRegionId === "12" ? "#6e5c65" : "#d62828"}
                     onClick={() => onRegionClick?.("12")}
                     style={{ cursor: "pointer" }}
                     />
@@ -267,7 +270,7 @@ function UkraineMap({
                     l-0.026-0.019l-0.028-0.015l-1.533-0.829l-0.089-0.048l-0.101-0.01l-1.436-0.138l-0.107-0.01l-0.102,0.034l-1.522,0.516
                     l-2.13-0.257l-1.478-0.532l-1.675-0.671l-1.383-0.8l-1.897-1.368l-2.125-1.396l-1.939-1.121l-0.065-0.038l-0.074-0.017
                     l-1.822-0.416l-0.126-0.029l-0.124,0.036l-1.826,0.528l-1.393-0.12l-1.754-1.247L503.507,439.625L503.507,439.625z"
-                    fill={selectedRegionId === "12" ? "#670707" : "#d62828"}
+                    fill={selectedRegionId === "12" ? "#6e5c65" : "#d62828"}
                     onClick={() => onRegionClick?.("12")}
                     style={{ cursor: "pointer" }}
                     stroke="#ffffff"
@@ -360,7 +363,7 @@ function UkraineMap({
                 l0.335-0.265l0.242-0.11l0.229,0.109l0.28,0.384l1.069-0.081l0.365-0.865l-0.395-0.888l-1.201-0.165l0.138-0.334l0.091-0.319
                 l0.119-0.328l0.204-0.334l-0.242-1.128l0.641-0.704l1.023-0.331l5.624-0.33l1.58,0.197l1.001,0.571l1.875,1.615l0.989,0.381
                 l0.963-0.419l0.674-1.118l0.632-1.336l0.827-1.086l3.229-1.337l3.767-0.019l7.187,1.399L425.375,70.463z"
-                fill={selectedRegionId === "25" ? "#670707" : getColor(25)}
+                fill={selectedRegionId === "25" ? "#6e5c65" : getColor(25)}
                 onClick={() => onRegionClick?.("25")}
                 style={{ cursor: "pointer" }}
                 />
@@ -426,7 +429,7 @@ function UkraineMap({
                 l0.42-0.441l0.505-0.282l3.992-1.046l0.963,0.026l2.898,0.873l1.027,0.096l1.625,0.658l1.15,1.407l1.167,1.101l1.642-0.27
                 l6.135-5.541l4.654-3.207l1.158-1.635l0.976-4.328l0.632-1.29l1.493-2.232l0.891-0.928l0.87-0.326l10.221-0.806l2.516,0.613
                 l0.853,0.038l11.532-1.872l3.691-1.949l1.862-0.612l1.858-0.053l6.924,1.882L170.168,82.542z"
-                fill={selectedRegionId === "3" ? "#670707" : getColor(3)}
+                fill={selectedRegionId === "3" ? "#6e5c65" : getColor(3)}
                 onClick={() => onRegionClick?.("3")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -515,7 +518,7 @@ function UkraineMap({
                 l0.344-0.647l2.013-2.892l1.447-1.284l0.293-0.321l0.535-0.792l0.42-0.817l0.121-0.357l0.07-0.319l-0.013-0.261l-0.051-0.233
                 l-0.07-0.22l-0.089-0.203l-0.146-0.433l-0.102-0.381l-0.07-0.477l-0.006-0.474l0.051-0.316l0.108-0.256l0.127-0.17l0.159-0.151
                 l0.172-0.132l0.588-0.354l0.146-0.167l-0.096-0.11l-0.223-0.055l-3.734-0.265l-0.503-0.32L170.168,82.542z"
-                fill={selectedRegionId === "17" ? "#670707" : getColor(17)}
+                fill={selectedRegionId === "17" ? "#6e5c65" : getColor(17)}
                 onClick={() => onRegionClick?.("17")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -607,7 +610,7 @@ function UkraineMap({
                 l1.631,1.432l0.204,0.114l0.216,0.056l0.261-0.048l0.108-0.206l0.057-0.255l-0.025-0.25l-0.064-0.219l-0.089-0.202l-0.236-0.357
                 l-0.605-0.609l-0.108-0.371l-0.044-0.565l0.159-1.278l0.121-0.587l0.14-0.397l0.146-0.131l0.376-0.199l0.439-0.133l0.976-0.489
                 L257.143,110.977z"
-                fill={selectedRegionId === "6" ? "#670707" : getColor(6)}
+                fill={selectedRegionId === "6" ? "#6e5c65" : getColor(6)}
                 onClick={() => onRegionClick?.("6")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -736,7 +739,7 @@ function UkraineMap({
                 l0.102,1.173l0.729,0.335l0.136,1.105l0.692-0.367l1.11,0.99l-0.399,2.813l1.03,0.035l0.227,3.087l1.099,0.406l0.547,1.937
                 l0.155,2.98l2.571-1.248l-0.373-1.042l0.461-0.674l-0.958-2.285l-0.255-1.694l0.779-0.088l0.6-2.043l-0.687-2.416l-1.188-3.133
                 l0.395-0.564l-0.51-1.037l1.494-0.535l0.233,0.95l0.884-0.277l1.15,0.474l0.845-0.293l-0.056-1.929l0.312-1.096L383.887,189.139z"
-                fill={selectedRegionId === "10" ? "#670707" : getColor(10)}
+                fill={selectedRegionId === "10" ? "#6e5c65" : getColor(10)}
                 onClick={() => onRegionClick?.("10")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -783,7 +786,7 @@ function UkraineMap({
                 l-0.174-0.025l-0.166,0.025l-0.165,0.08l-0.322,0.258l-0.318,0.091l-0.297-0.081l-0.267-0.271l-2.011-3.12l-0.441-1.253
                 l-0.038-0.852l0.093-0.712v-0.606l-0.306-0.52l-0.284-0.051l-1.133,0.069l0.009-0.985l0.611-1.869l-1.468-0.732l-1.4-0.177
                 l-1.345,0.534l-0.407,0.446l-0.042,0.006l-0.072,0.01L30,307.895z"
-                fill={selectedRegionId === "7" ? "#670707" : getColor(7)}
+                fill={selectedRegionId === "7" ? "#6e5c65" : getColor(7)}
                 onClick={() => onRegionClick?.("7")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -825,7 +828,7 @@ function UkraineMap({
                 l-0.115,0.455l-0.356,0.374l-0.282-0.01l-0.677-0.271l-0.227,0.019l-0.433,0.605l0.028,0.554l0.242,0.744l0.216,1.187l0.03,1.166
                 l-0.178,0.799l-0.467,0.427l-0.812,0.064l-0.766-0.351l-0.505-0.663l-0.437-0.761l-0.556-0.63l-0.806-0.313l-0.238,0.523
                 l-0.202,0.796l-1.356,0.859l-0.45,0.74l-0.267,0.969L214.112,316.899z"
-                fill={selectedRegionId === "24" ? "#670707" : getColor(24)}
+                fill={selectedRegionId === "24" ? "#6e5c65" : getColor(24)}
                 onClick={() => onRegionClick?.("24")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -892,7 +895,7 @@ function UkraineMap({
                 l0.108,0.169l0.617,0.777l0.095,0.171l0.083,0.185l0.051,0.218l0.038,0.231v1.295l0.038,0.231l0.108,0.421l0.327,0.756l0.07,0.201
                 l0.045,0.22l0.038,0.237l0.006,0.247l-0.006,0.243l-0.153,0.49l-1.924,4.348l-0.064,0.196l-0.153,1.38l-0.013,0.304l0.015,0.738
                 L144.777,350.328z"
-                fill={selectedRegionId === "9" ? "#670707" : getColor(9)}
+                fill={selectedRegionId === "9" ? "#6e5c65" : getColor(9)}
                 onClick={() => onRegionClick?.("9")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -998,7 +1001,7 @@ function UkraineMap({
                 l-1.216-3.156l0.214-1.163l-0.802-1.097l-1.201-0.677L279.68,485.549z M349.612,471.458l6.444-5.986l2.064-1.121l-8.946,8.53
                 l-4.129,3.06l-3.14,1.346l2.065-1.132l0.828-0.659l0.327-0.573l0.22-0.552l0.528-0.215l0.635-0.086l0.558-0.172l0.658-0.538
                 l1.186-1.305L349.612,471.458z"
-                fill={selectedRegionId === "15" ? "#670707" : getColor(15)}
+                fill={selectedRegionId === "15" ? "#6e5c65" : getColor(15)}
                 onClick={() => onRegionClick?.("15")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1086,7 +1089,7 @@ function UkraineMap({
                 l-0.428-0.492l-0.704-0.092l-1.892,0.223l-0.696,0.454l-0.649,0.565l-0.878,0.513l-0.959,0.215l-0.7-0.221l-0.433-0.697
                 l-0.148-1.191l-0.297-1.016l-0.674,0.104l-1.273,1.085l-0.636,0.175l-0.916-0.043l-0.598-0.46l0.806-2.417l-0.225-1.108
                 l-0.675-0.794l-0.84-0.405l-2.166-0.271l-1.483-0.185l-1.667-0.651l-0.899-1.424l-0.323-0.29L266.143,309.524z"
-                fill={selectedRegionId === "2" ? "#670707" : getColor(2)}
+                fill={selectedRegionId === "2" ? "#6e5c65" : getColor(2)}
                 onClick={() => onRegionClick?.("2")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1151,7 +1154,7 @@ function UkraineMap({
                 l-1.657,0.556l-0.375,0.189l-0.286,0.068l-0.356,0.037l-0.645-0.037l-0.318-0.1l-0.248-0.129l-0.127-0.153l-0.216-0.35l-0.076-0.2
                 l-0.064-0.218l-0.134-0.305l-0.242-0.355l-1.447-1.234l-1.044-1.222l-0.212-0.355l-0.14-0.378l-0.115-0.701l-0.013-0.249
                 l0.019-0.517l0.025-0.255l0.127-0.457l0.384-0.818l-0.047-0.504L60.8,270.5L60.056,270.044z"
-                fill={selectedRegionId === "13" ? "#670707" : getColor(13)}
+                fill={selectedRegionId === "13" ? "#6e5c65" : getColor(13)}
                 onClick={() => onRegionClick?.("13")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1235,7 +1238,7 @@ function UkraineMap({
                 l-0.096-0.2l-0.121-0.176l-0.465-0.47l-0.745-1.069l-0.938-0.935l-0.191-0.135l-1.79-0.615l-0.185-0.118l-0.098-0.629l-0.233-3.18
                 l0.216-0.793l1.073-1.117l0.418-0.67l0.095-0.492l0.102-1.244l0.083-0.513l0.204-0.461l0.528-0.78l0.108-0.423l0.115-1.079
                 l0.314-1.135L492.543,54.127z"
-                fill={selectedRegionId === "18" ? "#670707" : getColor(18)}
+                fill={selectedRegionId === "18" ? "#6e5c65" : getColor(18)}
                 onClick={() => onRegionClick?.("18")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1325,7 +1328,7 @@ function UkraineMap({
                 l0.229-0.085h0.248l0.257,0.055l0.445,0.204l2.783,1.767l0.356,0.116l0.172-0.068l0.032-0.154l-0.076-0.169l-0.299-0.382
                 l-0.083-0.176l-0.026-0.246l0.096-0.12l0.108-0.042l1.307,0.269l1.203-0.108l0.649-0.316l0.422-0.103l0.312-0.03l1.305,0.387
                 l0.779,0.101l0.668-0.023l0.35-0.08l0.261-0.118l0.153-0.148l0.129-0.186l0.115-0.223l0.093-0.274l0.059-0.234L586.615,185.603z"
-                fill={selectedRegionId === "20" ? "#670707" : getColor(20)}
+                fill={selectedRegionId === "20" ? "#6e5c65" : getColor(20)}
                 onClick={() => onRegionClick?.("20")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1392,7 +1395,7 @@ function UkraineMap({
                 l-0.076-0.113l-0.089-0.222l0.038-0.186l0.064-0.145l0.216-0.245l0.719-0.377l0.815-0.24l0.906-0.072l0.236-0.053l0.204-0.112
                 l0.191-0.204l0.032-0.201l-0.076-0.178l-0.808-0.484l-0.165-0.14l-0.14-0.158l-0.242-0.337l-0.102-0.174l-0.658-1.561l-0.134-0.593
                 L682.291,213.458z"
-                fill={selectedRegionId === "1" ? "#670707" : "#d62828"}
+                fill={selectedRegionId === "1" ? "#6e5c65" : "#d62828"}
                 onClick={() => onRegionClick?.("1")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1486,7 +1489,7 @@ function UkraineMap({
                 l0.127,0.289l0.064,0.55l-0.057,0.322l-0.102,0.256l-0.363,0.578l-0.21,0.43l-0.089,0.237l-0.064,0.249l-0.038,0.238l0.21,0.382
                 l0.395,0.459l1.033,0.922l0.516,0.314l0.394,0.168l2.93-0.06l3.835,0.888l0.172,0.342l0.102,0.558l-0.115,2.034l0.013,0.548
                 l0.185,0.447l0.178,0.244l0.197,0.177l0.358,0.25l0.055,0.48l0.021,0.391l-0.715,3.154l-0.076,0.522L723.886,341.587z"
-                fill={selectedRegionId === "5" ? "#670707" : getColor(5)}
+                fill={selectedRegionId === "5" ? "#6e5c65" : getColor(5)}
                 onClick={() => onRegionClick?.("5")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1580,7 +1583,7 @@ function UkraineMap({
                 M432.597,441.117l5.358,1.313l3.378,1.568l0.541,0.393l-0.919-0.195l-1.727-0.832l-14.97-3.207l-6.438-2.492l-1.286-1.167
                 l-1.109-1.83l-0.327-0.963l-0.367-1.517l-0.027-1.096l0.722,0.29l0.675,2.536l0.655,1.753l0.969,1.233l1.65,0.971L432.597,441.117z
                 "
-                fill={selectedRegionId === "21" ? "#670707" : getColor(21)}
+                fill={selectedRegionId === "21" ? "#6e5c65" : getColor(21)}
                 onClick={() => onRegionClick?.("21")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1672,7 +1675,7 @@ function UkraineMap({
                 l-0.214-0.277l-0.274-0.238l-0.842-0.38l-0.728,0.024l-1.53,0.355l-2.973-0.446l-5.602,1.066l-0.982-0.027l-3.057,1.756
                 l-2.298,1.32l-1.199,1.006l-3.311,3.889l-1.34,1.24l-4.851,2.46l-0.782,0.55l-0.645,0.732l-1.243,1.769l-0.635,0.62l-1.436,1.01
                 l-0.611,0.603l-3.925,6.493L569.675,438.116z"
-                fill={selectedRegionId === "8" ? "#670707" : getColor(8)}
+                fill={selectedRegionId === "8" ? "#6e5c65" : getColor(8)}
                 onClick={() => onRegionClick?.("8")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1793,7 +1796,7 @@ function UkraineMap({
                 l-0.547,0.096l-0.255,0.102l-0.248,0.156l-0.331,0.339l-0.165,0.27l-0.115,0.266l-0.403,1.125l-0.401,0.779l-0.115,0.169
                 l-0.274,0.289l-0.293,0.255l-0.696,0.302l-1.298,0.379l-0.445,0.006l-0.522-0.18l-0.677-0.419l-0.216-0.065l-0.236-0.028
                 l-0.28,0.056l-0.318,0.116l-0.721,0.501l-0.318,0.35l-0.63,0.21l-2.064-0.049l-0.059,0.275L433.608,410.275z"
-                fill={selectedRegionId === "14" ? "#670707" : getColor(14)}
+                fill={selectedRegionId === "14" ? "#6e5c65" : getColor(14)}
                 onClick={() => onRegionClick?.("14")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1879,7 +1882,7 @@ function UkraineMap({
                 l-0.127-0.215l-0.172-0.176l-0.547-0.749l-0.248-0.671l-0.244-0.416l-0.204-0.222l-0.223-0.06l-0.401,0.04l-0.407-0.093
                 l1.078-1.589l0.093-0.209l0.123-0.36l-0.034-0.204l-0.089-0.202l-0.115-0.191l-0.076-0.252l0.064-0.194l0.165-0.176l0.632-0.948
                 L440.761,185.221z"
-                fill={selectedRegionId === "16" ? "#670707" : getColor(16)}
+                fill={selectedRegionId === "16" ? "#6e5c65" : getColor(16)}
                 onClick={() => onRegionClick?.("16")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -1975,7 +1978,7 @@ function UkraineMap({
                 l0.344-0.237l0.789-0.361l0.874-0.272l0.191-0.095l0.172-0.124l0.127-0.177l0.197-0.761l0.178-0.443l0.127-0.175l0.165-0.155
                 l0.248-0.09l0.658-0.035l0.286,0.12l0.229,0.214l0.178,0.501l0.057,0.356l0.013,0.334l-0.019,0.289v0.264l0.255,0.26l0.255,0.164
                 L237.691,172.902z"
-                fill={selectedRegionId === "22" ? "#670707" : getColor(22)}
+                fill={selectedRegionId === "22" ? "#6e5c65" : getColor(22)}
                 onClick={() => onRegionClick?.("22")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -2054,7 +2057,7 @@ function UkraineMap({
                 l-0.032-0.237l-0.064-0.217l-0.07-0.207l-0.178-0.385l-0.032-0.267l0.038-0.331l0.197-0.497l0.191-0.245l0.242-0.119l0.579-0.033
                 l0.401-0.119l0.18-0.189l0.076-0.226l-0.013-0.241l-0.051-0.221l-0.076-0.208l-0.095-0.181l-0.499-0.66l-0.102-0.18l-0.153-0.411
                 l-0.108-0.186l-0.14-0.147l-0.878-0.615l-0.153-0.142l-0.242-0.312l-0.097-0.208l-0.03-0.104l-0.076-0.309L162.787,206.823z"
-                fill={selectedRegionId === "19" ? "#670707" : getColor(19)}
+                fill={selectedRegionId === "19" ? "#6e5c65" : getColor(19)}
                 onClick={() => onRegionClick?.("19")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -2178,7 +2181,7 @@ function UkraineMap({
                 l0.166,0.138l0.102,0.156l-0.019,0.193l-0.108,0.154l-0.299,0.272l-0.108,0.172l-0.051,0.203l0.013,0.206l0.159,0.178l0.255,0.117
                 l0.49,0.028l0.274-0.096l0.21-0.143l0.115-0.198l0.096-0.219l0.142-0.534l0.102-0.308l0.144-0.311l0.327-0.383l0.261-0.156
                 l0.255-0.075l0.248,0.023l0.477,0.152l0.426,0.214L557.541,260.611z"
-                fill={selectedRegionId === "4" ? "#670707" : getColor(4)}
+                fill={selectedRegionId === "4" ? "#6e5c65" : getColor(4)}
                 onClick={() => onRegionClick?.("4")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -2286,7 +2289,7 @@ function UkraineMap({
                 l0.07-0.305l-0.057-0.62l-0.019-0.386l0.038-0.331l0.229-0.298l0.206-0.165l0.764-0.392l0.127-0.214l0.064-0.289l-0.14-0.649
                 l-0.108-0.345l-0.07-0.331l0.006-0.258l0.134-0.357l0.286-0.419l0.032-0.256l-0.064-0.303l-0.267-0.411l-0.204-0.227l-0.216-0.162
                 l-0.619-0.305l-0.165-0.133l-0.006-0.455L340.52,256.619z"
-                fill={selectedRegionId === "23" ? "#670707" : getColor(23)}
+                fill={selectedRegionId === "23" ? "#6e5c65" : getColor(23)}
                 onClick={() => onRegionClick?.("23")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -2408,7 +2411,7 @@ function UkraineMap({
                 l-0.738-0.168l-0.161-0.129l-0.102-0.168l-0.7-1.978l-0.064-0.204l-0.197-0.547l-0.038-0.128l-0.026-0.155l-0.044-0.426
                 l0.019-1.678l-0.064-0.69l-0.331-1.488l-0.306-0.775l-0.089-0.182l-0.108-0.172l-0.127-0.165l-0.136-0.146l-0.477-0.407
                 l-0.274-0.32l-0.025-0.214l0.032-0.217l0.91-2.624l0.104-0.234L467.427,254.448z"
-                fill={selectedRegionId === "11" ? "#670707" : getColor(11)}
+                fill={selectedRegionId === "11" ? "#6e5c65" : getColor(11)}
                 onClick={() => onRegionClick?.("11")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -2424,7 +2427,7 @@ function UkraineMap({
                 l0.704-1.779l1.315-0.548l0.91-0.8l-0.121-1.83l0.943-1.059l2.229,0.92l1.723,0.981l0.307,3.546l-1.546,1.781l-1.193,0.79
                 l-0.919,1.468l-0.109,0.979l0.719,1.136l-0.451,0.791l0.129,2.358l2.255,3.563l0.075,1.117l1.192,0.884l-0.648,1.336l-1.646,0.009
                 l0.074,2.573L383.887,189.139z"
-                fill={selectedRegionId === "26" ? "#670707" : getColor(26)}
+                fill={selectedRegionId === "26" ? "#6e5c65" : getColor(26)}
                 onClick={() => onRegionClick?.("26")}
                 style={{ cursor: "pointer" }}
                 stroke="#ffffff"
@@ -2456,34 +2459,6 @@ function UkraineMap({
         </g>
 
         </svg>
-
-        <div style={{ marginTop: "12px" }}>
-        <span style={{ display: "inline-block", marginRight: "16px" }}>
-            <span
-            style={{
-                display: "inline-block",
-                width: "14px",
-                height: "14px",
-                backgroundColor: "#d62828",
-                marginRight: "6px"
-            }}
-            />
-            Air Alarm
-        </span>
-
-        <span style={{ display: "inline-block" }}>
-            <span
-            style={{
-                display: "inline-block",
-                width: "14px",
-                height: "14px",
-                backgroundColor: "#d9d9d9",
-                marginRight: "6px"
-            }}
-            />
-            No Air Alarm
-        </span>
-        </div>
         </div>
         );
     }
