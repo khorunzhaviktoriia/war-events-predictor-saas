@@ -41,7 +41,6 @@ def normalize_forecast(raw_data):
 
 
 def update_forecast_file():
-    raw_data = load_forecast()
-    forecast = normalize_forecast(raw_data)
+    forecast = load_forecast()
     save_forecast(forecast)
     return forecast
