@@ -1,10 +1,10 @@
 # Air Alarm Forecasting in Ukraine
 
-This repository contains a practical pipeline for collecting data, updating a historical dataset, generating **next-24-hour air raid alarm forecasts**, and periodically retraining the production model.
+This repository contains a practical pipeline for collecting data, updating a historical dataset, generating **next-24-hour air alarm forecasts**, and periodically retraining the production model.
 
 ## Project Overview
 
-The goal of this project is to predict whether an air raid alarm will be active for each region at hourly granularity.
+The goal of this project is to predict whether an air alarm will be active for each region at hourly granularity.
 
 The repository includes:
 - training and evaluation of 6 models
