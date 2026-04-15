@@ -1,6 +1,6 @@
 import json
 
-FILE_PATH = "data/forecast_mock.json"
+FILE_PATH = "war-events-predictor-saas/data/predictions/next_24h_predictions.json"
 
 
 def load_forecast():
