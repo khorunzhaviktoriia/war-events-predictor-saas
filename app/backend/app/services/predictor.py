@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 from app.services.storage import save_forecast, load_forecast
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parents[4]
 DATASET_PATH = BASE_DIR / "data" / "final_merged_dataset.parquet"
 
 

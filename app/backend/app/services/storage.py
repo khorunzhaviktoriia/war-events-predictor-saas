@@ -1,13 +1,14 @@
 import json
+from pathlib import Path
 
-FILE_PATH = "war-events-predictor-saas/data/predictions/next_24h_predictions.json"
-
+BASE_DIR = Path(__file__).resolve().parents[4]
+FILE_PATH = BASE_DIR / "data" / "predictions" / "next_24h_predictions.json"
 
 def load_forecast():
     with open(FILE_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def save_forecast(data):
+    FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(FILE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
