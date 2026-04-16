@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import "./index.css";
-import UkraineMap from "./UkraineMap";
+import UkraineMap from "./UkraineMap.jsx";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = "";
 const ALARM_THRESHOLD = 0.5;
 
 const isAlarm = (value) => value >= ALARM_THRESHOLD;
