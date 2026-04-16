@@ -16,7 +16,16 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState("light");
-  const [selectedTime, setSelectedTime] = useState("12:00");
+
+  const getNextHour = () => {
+    const now = new Date();
+    now.setHours(now.getHours() + 1);
+
+    const hours = String(now.getHours()).padStart(2, "0");
+    return `${hours}:00`;
+  };
+
+  const [selectedTime, setSelectedTime] = useState(getNextHour());
 
   const ALWAYS_ALARM_REGIONS = ["1", "12"];
 
@@ -133,8 +142,17 @@ function App() {
 
   const availableTimes = useMemo(() => {
     if (!data?.regions_forecast) return [];
-    const firstRegion = Object.values(data.regions_forecast)[0];
-    return firstRegion ? Object.keys(firstRegion) : [];
+
+    const firstRegion = data?.regions_forecast
+    ? data.regions_forecast[Object.keys(data.regions_forecast)[0]]
+    : null;
+    if (!firstRegion) return [];
+
+    return Object.keys(firstRegion).sort((a, b) => {
+      const hourA = parseInt(a.split(":")[0], 10);
+      const hourB = parseInt(b.split(":")[0], 10);
+      return hourA - hourB;
+    });
   }, [data]);
 
   const alarmRegionsCount = useMemo(() => {
@@ -144,7 +162,7 @@ function App() {
     const dynamicCount = Object.entries(safeData.regions_forecast).filter(
       ([regionId, forecast]) =>
         !ALWAYS_ALARM_REGIONS.includes(regionId) &&
-        isAlarm(forecast?.[selectedTime])
+        isAlarm((forecast?.[selectedTime] ?? 0))
     ).length;
 
     return dynamicCount + ALWAYS_ALARM_REGIONS.length;
@@ -350,7 +368,7 @@ function App() {
 
           <div className="legend-item">
               <div className="legend-box" style={{ background: "#d62828" }}></div>
-              <span>Simferopol, Luhansk</span>
+              <span>A.R. Crimea, Luhansk</span>
             </div>
           </div>
 
