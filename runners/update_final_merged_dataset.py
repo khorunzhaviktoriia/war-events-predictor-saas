@@ -77,6 +77,43 @@ WEATHER_DROP_COLUMNS = [
 ISW_TEXT_TOPLEVEL_COLUMNS = ["date", "title", "url", "text"]
 TELEGRAM_TEXT_TOPLEVEL_COLUMNS = ["date", "channel", "message"]
 
+TG_REGION_COLS = [
+    "tg_region_threat_count",
+    "tg_region_allclear_count",
+    "tg_region_mention_count",
+]
+
+TG_REGION_PATTERNS: dict[int, str] = {
+    1:  r'вінниц',
+    2:  r'волин|луцьк',
+    3:  r'дніпр|дніпропетровськ',
+    4:  r'донецьк|донеччин',
+    5:  r'житомир',
+    6:  r'закарпат|ужгород',
+    7:  r'запоріж',
+    8:  r'івано.франків',
+    9:  r'київськ|київщин',
+    10: r'кіровоград|кропивницьк',
+    11: r'луганськ|луганщин',
+    13: r'львів',
+    14: r'миколаїв',
+    15: r'одес',
+    16: r'полтав',
+    17: r'рівн',
+    18: r'сум',
+    19: r'тернопіл',
+    20: r'харків|харківщин',
+    21: r'херсон',
+    22: r'хмельниц',
+    23: r'черкас',
+    24: r'чернівц',
+    25: r'чернігів',
+    26: r'київ(?!ськ)',
+}
+
+TG_THREAT_PATTERN = r'загроза|виліт|пуск|ракет|шахед|герань|бпла|дрон|балістич|крилат'
+TG_ALLCLEAR_PATTERN = r'відбій'
+
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -97,6 +134,7 @@ class ProjectPaths:
     alarms_csv: Path
     isw_csv: Path
     telegram_csv: Path
+    tg_region_csv: Path
     final_parquet: Path
 
     @classmethod
@@ -113,11 +151,12 @@ class ProjectPaths:
             alarms_csv=data_dir / "war_events_processed.csv",
             isw_csv=data_dir / "isw_processed_svd.csv",
             telegram_csv=data_dir / "telegram_processed_svd.csv",
+            tg_region_csv=data_dir / "tg_region_features.csv",
             final_parquet=data_dir / "final_merged_dataset.parquet",
         )
 
     def validate(self) -> None:
-        required_files = [self.weather_csv, self.alarms_csv, self.isw_csv, self.telegram_csv,self.final_parquet]
+        required_files = [self.weather_csv, self.alarms_csv, self.isw_csv, self.telegram_csv, self.tg_region_csv, self.final_parquet]
 
         if not self.snapshots.exists() or not self.snapshots.is_dir():
             raise FileNotFoundError(
@@ -260,6 +299,8 @@ def align_to_template_columns(df: pd.DataFrame, template_columns: list[str]) -> 
                 out[col] = 0
             elif re.fullmatch(r"(isw|tg)_topic_\d+", col):
                 out[col] = 0.0
+            elif col in {*TG_REGION_COLS}:
+                out[col] = 0
             else:
                 out[col] = 0
     extras = [c for c in out.columns if c not in template_columns]
@@ -630,6 +671,82 @@ def preprocess_telegram_new_rows(
     out = out.drop_duplicates(keep="last").sort_values(["date", "channel"]).reset_index(drop=True)
     return out
 
+def preprocess_tg_region_new_rows(store: SnapshotStore,existing_max_dt: pd.Timestamp | None,) -> pd.DataFrame:
+    files = store.list_json_files("telegram")
+    if not files:
+        return pd.DataFrame(columns=["datetime_hour", "region_id", *TG_REGION_COLS])
+
+    rows: list[dict[str, Any]] = []
+    for path_ref in files:
+        payload = store.read_json(path_ref)
+        if isinstance(payload, list):
+            rows.extend(payload)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=["datetime_hour", "region_id", *TG_REGION_COLS])
+
+    for col in TELEGRAM_TEXT_TOPLEVEL_COLUMNS:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    df["date"] = normalize_telegram_dates_to_local(df["date"])
+    df = df[df["date"].notna()].copy()
+    if existing_max_dt is not None:
+        df = df[df["date"] > existing_max_dt].copy()
+
+    if df.empty:
+        return pd.DataFrame(columns=["datetime_hour", "region_id", *TG_REGION_COLS])
+
+    df["message"] = df["message"].astype(str)
+    df["datetime_hour"] = df["date"].dt.floor("h")
+    df["has_threat"] = df["message"].str.contains(TG_THREAT_PATTERN, case=False, regex=True).astype(int)
+    df["has_allclear"] = df["message"].str.contains(TG_ALLCLEAR_PATTERN, case=False, regex=True).astype(int)
+
+    region_dfs: list[pd.DataFrame] = []
+    for region_id, pattern in TG_REGION_PATTERNS.items():
+        mask = df["message"].str.contains(pattern, case=False, regex=True)
+        tmp = df.loc[mask, ["datetime_hour", "has_threat", "has_allclear"]].copy()
+        tmp["region_id"] = region_id
+        region_dfs.append(tmp)
+
+    if not region_dfs:
+        return pd.DataFrame(columns=["datetime_hour", "region_id", *TG_REGION_COLS])
+
+    df_region = pd.concat(region_dfs, ignore_index=True)
+    hourly = (
+        df_region.groupby(["datetime_hour", "region_id"])
+        .agg(
+            tg_region_threat_count=("has_threat", "sum"),
+            tg_region_allclear_count=("has_allclear", "sum"),
+            tg_region_mention_count=("has_threat", "count"),
+        )
+        .reset_index()
+    )
+    for col in TG_REGION_COLS:
+        hourly[col] = pd.to_numeric(hourly[col], errors="coerce").fillna(0)
+    return hourly
+
+
+def load_tg_region_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    df = load_csv_full(path)
+    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+    df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
+    df = df[df["region_id"].notna()].copy()
+    df["region_id"] = df["region_id"].astype(int)
+    for col in TG_REGION_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    if new_rows_df is not None and not new_rows_df.empty:
+        df = pd.concat([df, new_rows_df], ignore_index=True)
+    df = (
+        df.sort_values(["datetime_hour", "region_id"])
+        .drop_duplicates(["datetime_hour", "region_id"], keep="last")
+        .reset_index(drop=True)
+    )
+    return df
+
+
 def load_weather_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
     df = load_csv_full(path)
     df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
@@ -706,7 +823,13 @@ def aggregate_telegram_hourly_from_csv(
 
 
 
-def merge_historical_sources(weather_df: pd.DataFrame,alarms_df: pd.DataFrame,isw_df: pd.DataFrame,tg_hourly_df: pd.DataFrame) -> pd.DataFrame:
+def merge_historical_sources(
+    weather_df: pd.DataFrame,
+    alarms_df: pd.DataFrame,
+    isw_df: pd.DataFrame,
+    tg_hourly_df: pd.DataFrame,
+    tg_region_df: pd.DataFrame,
+) -> pd.DataFrame:
 
     df = weather_df.copy().sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     df = df.merge(
@@ -740,6 +863,18 @@ def merge_historical_sources(weather_df: pd.DataFrame,alarms_df: pd.DataFrame,is
         df[isw_cols] = df[isw_cols].fillna(0)
     if tg_cols:
         df[tg_cols] = df[tg_cols].fillna(0)
+
+    # merge tg_region_features
+    if not tg_region_df.empty:
+        tg_region_merge = tg_region_df[["datetime_hour", "region_id", *TG_REGION_COLS]].copy()
+        tg_region_merge["datetime_hour"] = pd.to_datetime(tg_region_merge["datetime_hour"], errors="coerce")
+        tg_region_merge["region_id"] = pd.to_numeric(tg_region_merge["region_id"], errors="coerce").astype(int)
+        df = df.merge(tg_region_merge, on=["datetime_hour", "region_id"], how="left")
+        df[TG_REGION_COLS] = df[TG_REGION_COLS].fillna(0)
+    else:
+        warn("tg_region_df is empty; tg_region_* columns will be zero-filled.")
+        for col in TG_REGION_COLS:
+            df[col] = 0
 
     df = df.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     return df
@@ -987,6 +1122,7 @@ def run_historical_pipeline(paths: ProjectPaths) -> None:
         "alarms": csv_max_timestamp(paths.alarms_csv, "datetime_hour"),
         "isw": csv_max_timestamp(paths.isw_csv, "date", is_date_only=True),
         "telegram": csv_max_timestamp(paths.telegram_csv, "date"),
+        "tg_region": csv_max_timestamp(paths.tg_region_csv, "datetime_hour"),
     }
 
     log("Processing weather snapshots")
@@ -1005,10 +1141,15 @@ def run_historical_pipeline(paths: ProjectPaths) -> None:
     telegram_new_rows = preprocess_telegram_new_rows(store, tg_cols, source_max["telegram"], paths.artifacts_dir)
     log(f"Telegram new rows: {len(telegram_new_rows)}")
 
+    log("Processing Telegram region features")
+    tg_region_new_rows = preprocess_tg_region_new_rows(store, source_max["tg_region"])
+    log(f"Telegram region new rows: {len(tg_region_new_rows)}")
+
     append_csv_rows(paths.weather_csv, weather_new_rows)
     append_csv_rows(paths.alarms_csv, alarms_new_rows)
     append_csv_rows(paths.isw_csv, isw_new_rows)
     append_csv_rows(paths.telegram_csv, telegram_new_rows)
+    append_csv_rows(paths.tg_region_csv, tg_region_new_rows)
     log("Processed source tables updated")
 
     log("Loading updated processed sources")
@@ -1016,9 +1157,10 @@ def run_historical_pipeline(paths: ProjectPaths) -> None:
     alarms_full = load_alarms_full(paths.alarms_csv)
     isw_full = load_isw_full(paths.isw_csv)
     tg_hourly_full = aggregate_telegram_hourly_from_csv(paths.telegram_csv)
+    tg_region_full = load_tg_region_full(paths.tg_region_csv)
 
     log("Merging processed sources")
-    merged = merge_historical_sources(weather_full, alarms_full, isw_full, tg_hourly_full)
+    merged = merge_historical_sources(weather_full, alarms_full, isw_full, tg_hourly_full, tg_region_full)
 
     log("Applying feature engineering")
     rebuilt = apply_feature_engineering(merged)
