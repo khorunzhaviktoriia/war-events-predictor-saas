@@ -51,6 +51,7 @@ class ProjectPaths:
     isw_csv: Path
     telegram_csv: Path
     forecast_weather_parquet: Path
+    tg_region_csv: Path
     output_dir: Path
 
     @classmethod
@@ -69,6 +70,7 @@ class ProjectPaths:
             isw_csv=data_dir / "isw_processed_svd.csv",
             telegram_csv=data_dir / "telegram_processed_svd.csv",
             forecast_weather_parquet=runtime_dir / "weather_forecast_processed.parquet",
+            tg_region_csv=data_dir / "tg_region_features.csv",
             output_dir=output_dir,
         )
 
@@ -176,6 +178,20 @@ def load_tg_hourly(paths: ProjectPaths) -> pd.DataFrame:
     return hourly.sort_values("datetime_hour").reset_index(drop=True)
 
 
+def load_tg_region(paths: ProjectPaths) -> pd.DataFrame:
+    df = pd.read_csv(paths.tg_region_csv, low_memory=False)
+    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+    df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
+    df = df[df["datetime_hour"].notna() & df["region_id"].notna()].copy()
+    df["region_id"] = df["region_id"].astype(int)
+    for col in ["tg_region_threat_count", "tg_region_allclear_count", "tg_region_mention_count"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df.sort_values(["datetime_hour", "region_id"]).drop_duplicates(
+        ["datetime_hour", "region_id"], keep="last"
+    ).reset_index(drop=True)
+
+
 def build_weather_lookup(actual_weather: pd.DataFrame, forecast_weather: pd.DataFrame) -> tuple[dict[tuple[pd.Timestamp, int], dict[str, Any]], list[str], list[str]]:
     combined = pd.concat([actual_weather, forecast_weather], ignore_index=True)
     combined = combined.sort_values(["datetime_hour", "region_id"]).drop_duplicates(["datetime_hour", "region_id"], keep="last")
@@ -206,6 +222,26 @@ def build_tg_lookup(tg_hourly: pd.DataFrame) -> tuple[dict[pd.Timestamp, dict[st
         lookup[pd.Timestamp(row["datetime_hour"])] = {col: float(row[col]) for col in tg_cols}
     last_dt = max(lookup.keys()) if lookup else None
     return lookup, tg_cols, last_dt
+
+
+TG_REGION_COLS = ["tg_region_threat_count", "tg_region_allclear_count", "tg_region_mention_count"]
+
+
+def build_tg_region_lookup(
+    tg_region: pd.DataFrame,
+) -> tuple[dict[tuple[pd.Timestamp, int], dict[str, float]], pd.Timestamp | None]:
+    lookup: dict[tuple[pd.Timestamp, int], dict[str, float]] = {}
+    available_cols = [c for c in TG_REGION_COLS if c in tg_region.columns]
+    last_dt: pd.Timestamp | None = None
+
+    for row in tg_region.to_dict("records"):
+        key = (pd.Timestamp(row["datetime_hour"]), int(row["region_id"]))
+        lookup[key] = {col: float(row.get(col, 0.0)) for col in available_cols}
+        dt = pd.Timestamp(row["datetime_hour"])
+        if last_dt is None or dt > last_dt:
+            last_dt = dt
+
+    return lookup, last_dt
 
 
 def validate_inputs(history: pd.DataFrame, forecast_weather: pd.DataFrame, model_features: list[str]) -> None:
@@ -414,6 +450,29 @@ def add_topic_derived_features(
             row["tg_intensity_zscore"] = zscore_last(intensity_series, window=24)
 
 
+def get_shifted_tg_region_values(
+    tg_region_lookup: dict[tuple[pd.Timestamp, int], dict[str, float]],
+    last_tg_region_dt: pd.Timestamp | None,
+    target_dt: pd.Timestamp,
+    region_id: int,
+) -> dict[str, float]:
+
+    src_dt = target_dt - pd.Timedelta(hours=1)
+    key = (src_dt, region_id)
+    if key in tg_region_lookup:
+        return dict(tg_region_lookup[key])
+
+    if last_tg_region_dt is not None:
+        fallback_key = (last_tg_region_dt, region_id)
+        if fallback_key in tg_region_lookup:
+            missing_hours = int((src_dt - last_tg_region_dt) / pd.Timedelta(hours=1))
+            decay = tg_decay_factor(missing_hours)
+            base = tg_region_lookup[fallback_key]
+            return {col: float(base.get(col, 0.0)) * decay for col in TG_REGION_COLS}
+
+    return {col: 0.0 for col in TG_REGION_COLS}
+
+
 def build_future_hour_rows(
     target_dt: pd.Timestamp,
     history_by_region: dict[int, pd.DataFrame],
@@ -428,6 +487,8 @@ def build_future_hour_rows(
     tg_lookup: dict[pd.Timestamp, dict[str, float]],
     tg_cols: list[str],
     last_real_tg_dt: pd.Timestamp | None,
+    tg_region_lookup: dict[tuple[pd.Timestamp, int], dict[str, float]],
+    last_tg_region_dt: pd.Timestamp | None,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
 
@@ -461,6 +522,7 @@ def build_future_hour_rows(
         row.update(get_weather_values(weather_lookup, region_id, target_dt, hour_weather_cols, day_weather_cols, prev_row))
         row.update(get_shifted_isw_values(isw_lookup, isw_cols, last_isw_date, target_dt, prev_row))
         row.update(get_shifted_tg_values(tg_lookup, tg_cols, last_real_tg_dt, target_dt, prev_row))
+        row.update(get_shifted_tg_region_values(tg_region_lookup, last_tg_region_dt, target_dt, region_id))
         add_topic_derived_features(row, region_hist, isw_cols, tg_cols)
         rows.append(row)
 
@@ -560,6 +622,7 @@ def main() -> None:
     actual_weather = load_processed_weather(paths)
     isw_daily = load_isw_daily(paths)
     tg_hourly = load_tg_hourly(paths)
+    tg_region = load_tg_region(paths)
 
     validate_inputs(history, forecast_weather, feature_names)
 
@@ -570,6 +633,7 @@ def main() -> None:
     weather_lookup, hour_weather_cols, day_weather_cols = build_weather_lookup(actual_weather, forecast_weather)
     isw_lookup, isw_cols, last_isw_date = build_isw_lookup(isw_daily)
     tg_lookup, tg_cols, last_real_tg_dt = build_tg_lookup(tg_hourly)
+    tg_region_lookup, last_tg_region_dt = build_tg_region_lookup(tg_region)
 
     future_hours = sorted(forecast_weather["datetime_hour"].drop_duplicates())
     all_preds: list[pd.DataFrame] = []
@@ -590,6 +654,8 @@ def main() -> None:
             tg_lookup=tg_lookup,
             tg_cols=tg_cols,
             last_real_tg_dt=last_real_tg_dt,
+            tg_region_lookup=tg_region_lookup,
+            last_tg_region_dt=last_tg_region_dt,
         )
 
         X_hour = ensure_numeric_bool_matrix(hour_rows, feature_names)
