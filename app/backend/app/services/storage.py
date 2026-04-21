@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[4]
-FILE_PATH = BASE_DIR / "data" / "predictions" / "next_24h_predictions.json"
+FILE_PATH = BASE_DIR / "data" / "predictions" / "next_24h_predictions_latest.json"
 
 def load_forecast():
     with open(FILE_PATH, "r", encoding="utf-8") as f:
