@@ -9,7 +9,6 @@ import pandas as pd
 KYIV_TZ = "Europe/Kyiv"
 EXPECTED_REGION_COUNT = 24
 TG_DECAY_HALFLIFE_HOURS = 6.0
-OUTPUT_FILENAME = "next_24h_predictions.json"
 
 NEIGHBOURING_REGIONS = {
     1: [21],
@@ -493,7 +492,10 @@ def model_train_time_from_file(model_path: Path) -> str:
 
 def save_predictions(predictions: pd.DataFrame, paths: ProjectPaths, threshold: float) -> Path:
     paths.output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = paths.output_dir / OUTPUT_FILENAME
+
+    ts = pd.Timestamp.now(tz=KYIV_TZ).strftime("%d_%m_%Y_%H-%M")
+    out_path = paths.output_dir / f"next_24h_predictions_{ts}.json"
+    latest_path = paths.output_dir / f"next_24h_predictions_latest.json"
 
     compact = predictions[[
         "datetime_hour",
@@ -536,6 +538,10 @@ def save_predictions(predictions: pd.DataFrame, paths: ProjectPaths, threshold: 
     }
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    with open(latest_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
     return out_path
 
 
