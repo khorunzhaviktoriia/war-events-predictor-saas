@@ -7,7 +7,7 @@ DATASET_PATH = BASE_DIR / "data" / "final_merged_dataset.parquet"
 
 
 def load_regions():
-    df = pd.read_parquet(DATASET_PATH)
+    df = pd.read_csv("data/regions.csv")
 
     region_map = (
         df[["region_id", "city_name"]]
