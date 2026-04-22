@@ -4,11 +4,9 @@ from app.services.storage import save_forecast, load_forecast
 
 BASE_DIR = Path(__file__).resolve().parents[4]
 DATASET_PATH = BASE_DIR / "data" / "final_merged_dataset.parquet"
-REGIONS_PATH = BASE_DIR / "data" / "regions.csv"
-
 
 def load_regions():
-    df = pd.read_csv(REGIONS_PATH)
+    df = pd.read_csv(DATASET_PATH)
 
     region_map = (
         df[["region_id", "city_name"]]
