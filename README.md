@@ -138,18 +138,20 @@ Run the notebooks in this order:
    EDA, preprocessing.
    
 3. `data_receiver/fetch_donetsk_weather.py`
+
    The provided data `data/all_weather_by_hour_2023-2026_v1.csv` did not include Donetsk for the last year, so we collected this data from another source(Open-Meteo Historical Weather API)
 
-4. `forecasting/donetsk_weather_patch.ipynb`
+5. `forecasting/donetsk_weather_patch.ipynb`
+
    This notebook patches the historical weather dataset with the collected Donetsk data.
 
-5. `forecasting/data_merge_feature_engineering.ipynb`  
+7. `forecasting/data_merge_feature_engineering.ipynb`  
    This notebook merges all processed sources and creates the final dataset:
    ```text
    data/final_merged_dataset.parquet
    ```
 
-6. Model notebooks
+8. Model notebooks
    
    You can only run the top model `forecasting/HistGradientBoostingClassifier.ipynb`.
 
@@ -206,7 +208,7 @@ data/predictions/
 python runners/retrain_top_model.py
 ```
 
-The retraining script trains a new model, compares it with the current production model, and replaces the production model only if the new one is not worse according to the selected validation logic.
+The retraining script trains a new model, compares it with the current production model, and replaces the production model only if the new one is not worse.
 
 ## Runtime Pipeline
 
