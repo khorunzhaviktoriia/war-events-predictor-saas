@@ -2,11 +2,12 @@
 
 This repository contains a machine learning pipeline for predicting whether an air alarm will be active in Ukrainian regions at hourly granularity. The project includes historical data preparation, model experiments, automated data collection, hourly dataset updates, next-24-hour prediction, model retraining, and a simple web interface.
 
-The project was developed as a university project. It is not an official warning system.
+This is a university project. It is not an official warning system.
 
 ## Table of Contents
 
-- [Project Overview and Data Flow](#project-overview-and-data-flow)
+- [Project Overview](#project-overview)
+- [Data Flow](#data-flow)
 - [Local Data and Artifacts](#local-data-and-artifacts)
 - [Installation](#installation)
 - [How to Start](#how-to-start)
@@ -16,50 +17,68 @@ The project was developed as a university project. It is not an official warning
 - [System Diagram](#system-diagram)
 - [User Interface](#user-interface)
 
-## Project Overview and Data Flow
+## Project Overview
 
 The project predicts the binary target `alarm_active` for each region and each hour:
 
 - `1` - an air alarm is active during the hour;
 - `0` - no air alarm is active during the hour.
 
-The project has two main parts:
+The model works at hourly granularity.
 
-### 1. Historical preparation
+The project has two main stages:
 
-The initial historical datasets are prepared in notebooks. This stage is used to explore, clean, transform, and merge the historical data.
+1. **Historical preparation**  
+   Historical data is cleaned, processed, transformed, and merged into one dataset.
 
-Main steps:
+2. **Runtime automation**  
+   New data snapshots are collected, the final dataset is updated, predictions for the next 24 hours are generated, and the model can be retrained periodically.
 
-1. Prepare weather, alarm, ISW, and Telegram datasets.
-2. Apply NLP preprocessing to ISW reports and Telegram messages.
-3. Save vectorizers and SVD models into `data/nlp_artifacts/`.
-4. Merge all processed sources into `data/final_merged_dataset.parquet`.
-5. Train and compare 6 models.
-6. Save the selected production model into `models/`.
+## Data Flow
 
-### 2. Runtime automation
+The historical dataset is built from four main data sources:
 
-After the historical dataset and artifacts exist locally, the runtime pipeline can update the project automatically.
+1. **Weather data**  
+   Hourly and daily weather features.
 
-The runtime flow is:
+2. **Air alarm data**  
+   Historical alarm events transformed into hourly binary labels.
+
+3. **ISW reports**  
+   Text reports processed with TF-IDF and dimensionality reduction.
+
+4. **Telegram messages**  
+   Channel messages processed into topic features and additional region-level signal features.
+
+The general data flow is:
 
 ```text
-run_collectors.py
+raw historical data
         ↓
-update_final_merged_dataset.py
+forecasting/eda_nlp_preparation.ipynb
         ↓
-predict_next_24h.py
+processed source files + NLP artifacts
         ↓
-retrain_top_model.py   (periodically)
+forecasting/data_merge_feature_engineering.ipynb
+        ↓
+data/final_merged_dataset.parquet
+        ↓
+model training
+        ↓
+models/2__hist_gradient_boosting__v1.pkl
 ```
 
-In simple terms:
+After the historical dataset and model are prepared, the runtime pipeline can be used:
 
-1. `run_collectors.py` collects new raw snapshots.
-2. `update_final_merged_dataset.py` preprocesses the snapshots and rebuilds the final merged dataset.
-3. `predict_next_24h.py` generates a 24-hour forecast.
-4. `retrain_top_model.py` trains a new model and replaces the production model only if the new one is not worse.
+```text
+runners/run_collectors.py
+        ↓
+runners/update_final_merged_dataset.py
+        ↓
+runners/predict_next_24h.py
+        ↓
+runners/retrain_top_model.py   # optional, periodic
+```
 
 ---
 
@@ -113,24 +132,26 @@ pip install -r requirements.txt
 
 ### 1. Prepare historical data
 
-Suggested order:
+Run the notebooks in this order:
 
 1. `forecasting/eda_nlp_preparation.ipynb`  
-   EDA, text preprocessing, and source-level preparation.
+   EDA, preprocessing.
+   
+3. `data_receiver/fetch_donetsk_weather.py`
+   The provided data `data/all_weather_by_hour_2023-2026_v1.csv` did not include Donetsk for the last year, so we collected this data from another source(Open-Meteo Historical Weather API)
 
-2. `forecasting/data_merge_feature_engineering.ipynb`  
-   Datasets merge and feature engineering. After this step, the main local dataset should be available as:
+4. `forecasting/donetsk_weather_patch.ipynb`
+   This notebook patches the historical weather dataset with the collected Donetsk data.
+
+5. `forecasting/data_merge_feature_engineering.ipynb`  
+   This notebook merges all processed sources and creates the final dataset:
    ```text
    data/final_merged_dataset.parquet
    ```
+
+6. Model notebooks
    
-3. `data_receiver/fetch_donetsk_weather.py`
-    The provided data `data/all_weather_by_hour_2023-2026_v1.csv` did not include Donetsk for the last year, so we collected this data from another source(Open-Meteo Historical Weather API)
-
-4. `forecasting/donetsk_weather_patch.ipynb`
-
-5. Model notebooks
-   You can only run the production model `forecasting/HistGradientBoostingClassifier.ipynb`.
+   You can only run the top model `forecasting/HistGradientBoostingClassifier.ipynb`.
 
 ### 2. Collect new data
 
@@ -144,7 +165,14 @@ This runner calls:
 - `data_receiver/telegram_scraper_cron.py`
 - `data_receiver/get_weather_24h_OpenMeteo.py`
 
-These scripts collect raw snapshots under `data/raw_snapshots/`. Also it collect 24-hour weather forecast.
+The scripts save raw snapshots under:
+
+```text
+data/raw_snapshots/
+```
+
+The weather forecast for inference is also collected during this step.
+
 
 ### 3. Update the historical dataset(`data/final_merged_dataset.parquet`)
 
