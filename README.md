@@ -7,6 +7,7 @@ This is a university project. It is not an official warning system.
 ## Table of Contents
 
 - [Project Overview](#project-overview)
+- [Repository Structure](#repository-structure)
 - [Data Flow](#data-flow)
 - [Local Data and Artifacts](#local-data-and-artifacts)
 - [Installation](#installation)
@@ -33,6 +34,30 @@ The project has two main stages:
 
 2. **Runtime automation**  
    New data snapshots are collected, the final dataset is updated, predictions for the next 24 hours are generated, and the model can be retrained periodically.
+
+## Repository Structure
+
+```text
+war-events-predictor-saas/
+│
+├── app/
+│   ├── backend/              # API for serving prediction results
+│   └── frontend/             # Web interface
+│
+├── data_receiver/            # Scripts for collecting weather, alarms, ISW and Telegram data
+│
+├── forecasting/              # EDA, preprocessing, merge, feature engineering and model notebooks
+│
+├── images/                   # Diagrams and UI screenshots used in README
+│
+├── runners/                  # Runtime scripts for collection, dataset update, prediction and retraining
+│
+├── README.md
+├── requirements.txt
+└── .gitignore
+```
+
+The `data/` and `models/` directories are expected to exist locally
 
 ## Data Flow
 
