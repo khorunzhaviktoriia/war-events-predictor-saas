@@ -1,7 +1,7 @@
 # SETUP:
 #   1. git clone <repo_url>
 #   2. cd <repo_folder>
-#   3. pip install -r requirements.txt
+#   3. pip install -r requirements_for_inference.txt
 #   4. python inference.py --model "path/to/1__hist_gradient_boosting__v1.pkl"
 
 import pickle
