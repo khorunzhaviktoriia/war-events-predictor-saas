@@ -2,7 +2,7 @@
 
 This repository contains a machine learning pipeline for predicting whether an air alarm will be active in Ukrainian regions at hourly granularity. The project includes historical data preparation, model experiments, automated data collection, hourly dataset updates, next-24-hour prediction, model retraining, and a simple web interface.
 
-This is a university project. It is not an official warning system.
+This is a university project. It is **not** an official warning system.
 
 ## Table of Contents
 
@@ -25,15 +25,7 @@ The project predicts the binary target `alarm_active` for each region and each h
 - `1` - an air alarm is active during the hour;
 - `0` - no air alarm is active during the hour.
 
-The model works at hourly granularity.
-
-The project has two main stages:
-
-1. **Historical preparation**  
-   Historical data is cleaned, processed, transformed, and merged into one dataset.
-
-2. **Runtime automation**  
-   New data snapshots are collected, the final dataset is updated, predictions for the next 24 hours are generated, and the model can be retrained periodically.
+The system works at hourly granularity. Historical data is first prepared in notebooks and merged into one modeling dataset. After that, runtime scripts can collect new data, update the dataset, generate forecasts for the next 24 hours, and retrain the production model.
 
 ## Repository Structure
 
@@ -160,27 +152,32 @@ pip install -r requirements.txt
 Run the notebooks in this order:
 
 1. `forecasting/eda_nlp_preparation.ipynb`  
-   EDA, preprocessing.
+   This notebook prepares the main historical sources, runs EDA, processes ISW and Telegram text data, and saves NLP artifacts such as vectorizers and SVD models.
    
-3. `data_receiver/fetch_donetsk_weather.py`
+2. `data_receiver/fetch_donetsk_weather.py`
 
    The provided data `data/all_weather_by_hour_2023-2026_v1.csv` did not include Donetsk for the last year, so we collected this data from another source(Open-Meteo Historical Weather API)
 
-5. `forecasting/donetsk_weather_patch.ipynb`
+3. `forecasting/donetsk_weather_patch.ipynb`
 
    This notebook patches the historical weather dataset with the collected Donetsk data.
 
-7. `forecasting/data_merge_feature_engineering.ipynb`  
+4. `forecasting/data_merge_feature_engineering.ipynb`  
    This notebook merges all processed sources and creates the final dataset:
    ```text
    data/final_merged_dataset.parquet
    ```
 
-8. Model notebooks
+5. Model notebooks
    
    You can only run the top model `forecasting/HistGradientBoostingClassifier.ipynb`.
 
-### 2. Collect new data
+
+### 2. Run the runtime pipeline
+
+After `data/final_merged_dataset.parquet`, NLP artifacts, and the production model exist locally, the automated pipeline can be started.
+
+#### 1. Collect new data
 
 ```bash
 python runners/run_collectors.py
@@ -201,7 +198,7 @@ data/raw_snapshots/
 The weather forecast for inference is also collected during this step.
 
 
-### 3. Update the historical dataset(`data/final_merged_dataset.parquet`)
+#### 2. Update the historical dataset
 
 ```bash
 python runners/update_final_merged_dataset.py
@@ -215,7 +212,7 @@ This script:
 - rebuilds `data/final_merged_dataset.parquet`
 - prepares weather forecast input for inference
 
-### 4. Run hourly forecast
+#### 3. Run hourly forecast
 
 ```bash
 python runners/predict_next_24h.py
@@ -227,7 +224,7 @@ Predictions are saved to:
 data/predictions/
 ```
 
-### 5. Retrain the model
+#### 4. Retrain the model
 
 ```bash
 python runners/retrain_top_model.py
@@ -246,19 +243,19 @@ update_final_merged_dataset.py
         ↓
 predict_next_24h.py
         ↓
-retrain_top_model.py  # optional, not necessarily hourly
+retrain_top_model.py  # optional, periodic
 ```
 
 For hourly automation, the first three scripts can be scheduled with cron. Retraining can be scheduled less frequently because it is heavier than inference.
 
-Example cron idea:
+Example cron setup:
 
 ```cron
 0 * * * * cd /path/to/war-events-predictor-saas && .venv/bin/python runners/run_collectors.py
 10 * * * * cd /path/to/war-events-predictor-saas && .venv/bin/python runners/update_final_merged_dataset.py
 20 * * * * cd /path/to/war-events-predictor-saas && .venv/bin/python runners/predict_next_24h.py
 ```
-Retraining can be scheduled less often, for example once per day or once per week:
+Optional retraining example:
 
 ```cron
 30 3 * * * cd /path/to/war-events-predictor-saas && /path/to/.venv/bin/python runners/retrain_top_model.py >> logs/retrain.log 2>&1
@@ -299,12 +296,16 @@ Example structure:
 
 ### Backend
 
+From the repository root:
+
 ```bash
 cd app/backend
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Frontend
+
+From the repository root:
 
 ```bash
 cd app/frontend
