@@ -1,8 +1,8 @@
 # SETUP:
 #   1. git clone <repo_url>
 #   2. cd <repo_folder>
-#   3. pip install -r requirements_for_inference.txt
-#   4. python inference.py --model "path/to/1__hist_gradient_boosting__v1.pkl"
+#   3. pip install -r inference/requirements_for_inference.txt
+#   4. python inference/inference.py --model "models/2__hist_gradient_boosting__v1.pkl"
 
 import pickle
 import argparse
@@ -107,7 +107,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="../data/1__hist_gradient_boosting__v1.pkl",
+        default="../models/2__hist_gradient_boosting__v1.pkl",
         help="Path to the pickle model file",
     )
     args = parser.parse_args()
