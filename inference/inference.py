@@ -107,7 +107,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="../models/2__hist_gradient_boosting__v1.pkl",
+        default="models/2__hist_gradient_boosting__v1.pkl",
         help="Path to the pickle model file",
     )
     args = parser.parse_args()
