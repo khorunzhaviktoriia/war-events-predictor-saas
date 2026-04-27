@@ -908,7 +908,7 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
         valid_neighbours = [n for n in neighbours if n in alarms_matrix.columns]
         neighbour_alarm_matrix[region] = alarms_matrix[valid_neighbours].sum(axis=1) if valid_neighbours else 0
     neighbour_alarm_matrix = neighbour_alarm_matrix.shift(1)
-    neighbour_alarm_long = neighbour_alarm_matrix.stack(dropna=False).reset_index()
+    neighbour_alarm_long = neighbour_alarm_matrix.stack().reset_index()
     neighbour_alarm_long.columns = ["datetime_hour", "region_id", "neighbour_alarms"]
     df = df.merge(neighbour_alarm_long, on=["datetime_hour", "region_id"], how="left")
     df["neighbour_alarms"] = df["neighbour_alarms"].fillna(0)
