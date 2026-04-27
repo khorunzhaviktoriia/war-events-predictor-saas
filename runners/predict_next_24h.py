@@ -582,7 +582,7 @@ def save_predictions(predictions: pd.DataFrame, paths: ProjectPaths, threshold: 
             for dt, proba in zip(part["datetime_hour"], part["prediction_proba"])
         }
 
-        regions_forecast[str(region_key)] = {
+        regions_forecast[str(first["region_id"])] = {
             "region_id": int(first["region_id"]),
             "city_name": str(first["city_name"]),
             "forecast": forecast_map,
