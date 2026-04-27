@@ -3,17 +3,19 @@ import pandas as pd
 from app.services.storage import save_forecast, load_forecast
 
 BASE_DIR = Path(__file__).resolve().parents[4]
-DATASET_PATH = BASE_DIR / "data" / "final_merged_dataset.parquet"
+DATASET_PATH = BASE_DIR / "data" / "regions.csv"
 
 def load_regions():
-    df = pd.read_csv(DATASET_PATH)
+    df = pd.read_csv(DATASET_PATH, encoding = "cp1251")
 
     region_map = (
-        df[["region_id", "city_name"]]
+        df[["region_id", "center_city_en"]]
         .drop_duplicates()
-        .sort_values("region_id")
+	.rename(columns={"center_city_en": "city_name"})
     )
 
+    region_map = region_map[~region_map["region_id"].isin([1, 12])]
+    region_map = region_map.sort_values("region_id")
     return region_map.to_dict(orient="records")
 
 
