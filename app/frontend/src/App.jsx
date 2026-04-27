@@ -2,10 +2,25 @@ import { useEffect, useMemo, useState } from "react";
 import "./index.css";
 import UkraineMap from "./UkraineMap.jsx";
 
-const API_BASE_URL = "";
-const ALARM_THRESHOLD = 0.5;
+const API_BASE_URL = "/api";
+const ALARM_THRESHOLD = 0.65;
 
 const isAlarm = (value) => value >= ALARM_THRESHOLD;
+const formatDateTime = (value) => {
+  if (!value || value === "—") return "—";
+
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return value;
+
+  return dt.toLocaleString("uk-UA", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+};
 
 function App() {
   const [selectedRegionId, setSelectedRegionId] = useState(null);
@@ -17,18 +32,19 @@ function App() {
   const [error, setError] = useState("");
   const [theme, setTheme] = useState("light");
 
-  const getNextHour = () => {
+  const getCurrentHour = () => {
     const now = new Date();
-    now.setHours(now.getHours() + 1);
-
+  
     const hours = String(now.getHours()).padStart(2, "0");
     return `${hours}:00`;
   };
 
-  const [selectedTime, setSelectedTime] = useState(getNextHour());
+  const [selectedTime, setSelectedTime] = useState(getCurrentHour());
 
   const ALWAYS_ALARM_REGIONS = ["1", "12"];
-
+  const REGION_NAME_OVERRIDES = {
+    "Zaporozhye": "Zaporizhzhia",
+    };
   const fallbackForecast = {
     last_model_train_time: "—",
     last_prediction_time: "—",
@@ -64,37 +80,55 @@ function App() {
     },
   };
 
-  const safeData = data || fallbackForecast;
+  const safeData = data ?? {
+    last_model_train_time: "—",
+    last_prediction_time: "—",
+    forecast_horizon_hours: "—",
+    regions_forecast: {},
+  };
 
   useEffect(() => {
     document.body.className = theme;
   }, [theme]);
 
-  useEffect(() => {
-    const fetchRegions = async () => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/regions`);
+useEffect(() => {
+  const fetchRegions = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/regions`);
 
-        if (!response.ok) {
-          throw new Error("Failed to get list of regions");
-        }
-
-        const result = await response.json();
-        setRegions(result);
-
-        const namesMap = {};
-        result.forEach((item) => {
-          namesMap[String(item.region_id)] = item.city_name;
-        });
-        setRegionNames(namesMap);
-      } catch (err) {
-        console.error(err);
-        setError(err.message || "Failed to load regions");
+      if (!response.ok) {
+        throw new Error("Failed to get list of regions");
       }
-    };
 
-    fetchRegions();
-  }, []);
+      const result = await response.json();
+      setRegions(result);
+
+      const namesMap = {};
+      result.forEach((item) => {
+        const original = item.city_name;
+        namesMap[String(item.region_id)] =
+          REGION_NAME_OVERRIDES[original] || original;
+      });
+      setRegionNames(namesMap);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Failed to load regions");
+    }
+  };
+
+  fetchRegions();
+
+  handleGetForecast();
+
+}, []);
+
+useEffect(() => {
+  const interval = setInterval(() => {
+    handleGetForecast();
+  }, 5 * 60 * 1000);
+
+  return () => clearInterval(interval);
+}, []);
 
   const handleGetForecast = async () => {
     try {
@@ -117,35 +151,10 @@ function App() {
     }
   };
 
-  const handleUpdateForecast = async () => {
-    try {
-      setLoading(true);
-      setError("");
-
-      const response = await fetch(`${API_BASE_URL}/forecast/update`, {
-        method: "POST",
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to update forecast");
-      }
-
-      await response.json();
-      await handleGetForecast();
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "Failed to update forecast");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const availableTimes = useMemo(() => {
     if (!data?.regions_forecast) return [];
 
-    const firstRegion = data?.regions_forecast
-    ? data.regions_forecast[Object.keys(data.regions_forecast)[0]]
-    : null;
+    const firstRegion = data.regions_forecast[Object.keys(data.regions_forecast)[0]];
     if (!firstRegion) return [];
 
     return Object.keys(firstRegion).sort((a, b) => {
@@ -155,28 +164,39 @@ function App() {
     });
   }, [data]);
 
-  const alarmRegionsCount = useMemo(() => {
-    if (!safeData?.regions_forecast || !selectedTime)
-      return ALWAYS_ALARM_REGIONS.length;
+  const rotatedTimes = useMemo(() => {
+    if (!availableTimes.length) return [];
 
-    const dynamicCount = Object.entries(safeData.regions_forecast).filter(
-      ([regionId, forecast]) =>
-        !ALWAYS_ALARM_REGIONS.includes(regionId) &&
-        isAlarm((forecast?.[selectedTime] ?? 0))
+    const currentHour = new Date().getHours();
+
+    const index = availableTimes.findIndex(
+      (t) => parseInt(t.split(":")[0], 10) === currentHour
+    );
+
+    if (index === -1) return availableTimes;
+
+    return [
+      ...availableTimes.slice(index),
+      ...availableTimes.slice(0, index),
+    ];
+  }, [availableTimes]);
+
+  const alarmRegionsCount = useMemo(() => {
+    if (!data?.regions_forecast || !selectedTime)
+      return 0;
+
+    return Object.entries(safeData.regions_forecast).filter(
+     ([regionId, forecast]) =>
+        ALWAYS_ALARM_REGIONS.includes(regionId) ||
+        isAlarm(forecast?.[selectedTime] ?? 0)
     ).length;
 
-    return dynamicCount + ALWAYS_ALARM_REGIONS.length;
   }, [safeData, selectedTime]);
 
-  const totalRegions = useMemo(() => {
-    if (data?.regions_forecast) {
-      return Object.keys(data.regions_forecast).length;
-    }
-    return regions.length;
-  }, [data, regions]);
+  const totalRegions = 26;
 
   const peakHourData = useMemo(() => {
-    if (!safeData?.regions_forecast) return { time: "-", count: 0 };
+    if (!data?.regions_forecast) return { time: "-", count: "-" };
 
     let bestTime = "-";
     let bestCount = -1;
@@ -199,13 +219,14 @@ function App() {
 
   const coveragePercent = useMemo(() => {
     if (!totalRegions) return 0;
-    return Math.round((alarmRegionsCount / totalRegions) * 100);
+    return Math.round(((alarmRegionsCount + 2) / totalRegions) * 100);
   }, [alarmRegionsCount, totalRegions]);
 
   const hourlyAlarmCounts = useMemo(() => {
     if (!safeData?.regions_forecast) return [];
 
-    return availableTimes.map((time) => {
+    return 
+availableTimes.map((time) => {
       const count = Object.values(safeData.regions_forecast).filter(
         (forecast) => isAlarm(forecast?.[time])
       ).length;
@@ -220,82 +241,139 @@ function App() {
 
     const forecast = safeData.regions_forecast[selectedRegionId];
 
-    const activeHours = Object.entries(forecast)
-      .filter(
-        ([_, value]) =>
-          ALWAYS_ALARM_REGIONS.includes(selectedRegionId) || isAlarm(value)
-      )
-      .map(([time]) => time);
+    const sortedTimes = Object.entries(forecast || {}).sort((a, b) => {
+  const hA = parseInt(a[0].split(":")[0], 10);
+  const hB = parseInt(b[0].split(":")[0], 10);
+  return hA - hB;
+});
 
-    const activeCount = ALWAYS_ALARM_REGIONS.includes(selectedRegionId)
-      ? 24
-      : activeHours.length;
+const activeHours = sortedTimes
+  .filter(
+    ([_, value]) =>
+      ALWAYS_ALARM_REGIONS.includes(selectedRegionId) || isAlarm(value)
+  )
+  .map(([time]) => time);
 
-    return {
-      regionId: selectedRegionId,
-      name: regionNames[selectedRegionId] || `Region ${selectedRegionId}`,
-      activeHours,
-      activeCount,
-      coverage: Math.round((activeCount / 24) * 100),
-      firstAlarm: activeHours[0] || "—",
-    };
+const activeCount = ALWAYS_ALARM_REGIONS.includes(selectedRegionId)
+  ? 24
+  : activeHours.length;
+
+const currentHour = new Date().getHours();
+
+const nowEntry = sortedTimes.find(([time]) => {
+  const hour = parseInt(time.split(":")[0], 10);
+  return hour === currentHour;
+});
+
+const isNowAlarm =
+  nowEntry &&
+  (ALWAYS_ALARM_REGIONS.includes(selectedRegionId) ||
+    isAlarm(nowEntry[1]));
+
+let firstAlarm = "—";
+
+if (isNowAlarm) {
+  firstAlarm = "Now";
+} else {
+  const nextAlarm = sortedTimes.find(([time, value]) => {
+    const hour = parseInt(time.split(":")[0], 10);
+    return (
+      hour > currentHour &&
+      (ALWAYS_ALARM_REGIONS.includes(selectedRegionId) ||
+        isAlarm(value))
+    );
+  });
+
+  if (nextAlarm) {
+    firstAlarm = nextAlarm[0];
+  } else {
+    const fallbackAlarm = sortedTimes.find(
+      ([_, value]) =>
+        ALWAYS_ALARM_REGIONS.includes(selectedRegionId) ||
+        isAlarm(value)
+    );
+
+    firstAlarm = fallbackAlarm ? fallbackAlarm[0] : "—";
+  }
+}
+
+let nextAlarm = "—";
+
+const selectedHour = parseInt(selectedTime.split(":")[0], 10);
+
+const selectedEntry = sortedTimes.find(([time]) => {
+  const hour = parseInt(time.split(":")[0], 10);
+  return hour === selectedHour;
+});
+
+const isSelectedAlarm =
+  selectedEntry &&
+  (ALWAYS_ALARM_REGIONS.includes(selectedRegionId) ||
+    isAlarm(selectedEntry[1]));
+
+if (isSelectedAlarm) {
+  nextAlarm = "Now";
+} else {
+  const nextEntry = sortedTimes.find(([time, value]) => {
+    const hour = parseInt(time.split(":")[0], 10);
+    return (
+      hour > selectedHour &&
+      (ALWAYS_ALARM_REGIONS.includes(selectedRegionId) ||
+        isAlarm(value))
+    );
+  });
+
+  if (nextEntry) {
+    nextAlarm = nextEntry[0];
+  } else {
+    const fallbackEntry = sortedTimes.find(
+      ([_, value]) =>
+        ALWAYS_ALARM_REGIONS.includes(selectedRegionId) ||
+        isAlarm(value)
+    );
+
+    nextAlarm = fallbackEntry ? fallbackEntry[0] : "—";
+  }
+}
+
+return {
+  regionId: selectedRegionId,
+  name: regionNames[selectedRegionId] || `Region ${selectedRegionId}`,
+  activeHours,
+  activeCount,
+  coverage: Math.round((activeCount / 24) * 100),
+  firstAlarm,
+  nextAlarm,
+};
   }, [selectedRegionId, safeData, regionNames]);
 
   const mostAffectedRegions = useMemo(() => {
-    if (!safeData?.regions_forecast) return [];
+  if (!safeData?.regions_forecast || !selectedTime) return [];
 
-    return Object.entries(safeData.regions_forecast)
-      .map(([regionId, forecast]) => {
-        const values = Object.values(forecast).map(v => v || 0);
-
-        const avg =
-          values.reduce((a, b) => a + b, 0) / values.length;
-
-        const max = Math.max(...values);
-
-        const variance =
-          values.reduce((sum, v) => sum + Math.pow(v - avg, 2), 0) /
-          values.length;
-
-        const volatility = Math.sqrt(variance); // σ
-
-        const riskScore = 0.5 * max + 0.3 * avg + 0.2 * volatility;
-
-        const adjustedScore = ALWAYS_ALARM_REGIONS.includes(regionId)
+  return Object.entries(safeData.regions_forecast)
+    .map(([regionId, forecast]) => ({
+      regionId,
+      name: regionNames[regionId] || `Region ${regionId}`,
+      probability:
+        ALWAYS_ALARM_REGIONS.includes(regionId)
           ? 1
-          : riskScore;
-
-        return {
-          regionId,
-          name: regionNames[regionId] || `Region ${regionId}`,
-          probability: adjustedScore,
-          max,
-          avg,
-          volatility,
-        };
-      })
-      .sort((a, b) => b.probability - a.probability)
-      .slice(0, 3);
-  }, [safeData, regionNames]);
+          : forecast?.[selectedTime] ?? 0,
+    }))
+    .sort((a, b) => b.probability - a.probability)
+    .slice(0, 3);
+}, [safeData, regionNames, selectedTime]);
 
   return (
     <div className="container">
       <div className="page-header">
         <div>
           <h1>Alarm Forecast</h1>
-          <p>24-hour forecast of air alarms by region</p>
+          <p>24-hour forecast of air alarms by region. Forecasts are generated every hour. To ensure you are viewing the latest data, please refresh the page approximately 15 minutes after the beginning of a new hour. </p>
         </div>
 
         <div className="top-buttons">
-          <button onClick={handleGetForecast} disabled={loading}>
-            Get forecast
-          </button>
-
-          <button onClick={handleUpdateForecast} disabled={loading}>
-            Update forecast
-          </button>
-
-          <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
+          
+         <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
             {theme === "light" ? "🌙 Dark" : "☀️ Light"}
           </button>
         </div>
@@ -309,18 +387,18 @@ function App() {
           <div className="card">
             <div className="card-title-row">
               <div>
-                <div className="card-title">Interactive Map</div>
-                <p className="muted">Selected hour: {selectedTime}</p>
+                <div className="card-title">Forecast map at {selectedTime}</div>
+                <p className="muted">Predicted probability of air alarm by region</p>
               </div>
 
               <div className="muted">
-                <strong>{alarmRegionsCount}</strong> alarms
+                <strong>{alarmRegionsCount+2}</strong> alarms
               </div>
             </div>
 
             <div className="map-shell">
               <UkraineMap
-                forecastData={safeData.regions_forecast}
+                forecastData={data ? data.regions_forecast : {}}
                 selectedTime={selectedTime}
                 theme={theme}
                 regionNames={regionNames}
@@ -368,7 +446,7 @@ function App() {
 
           <div className="legend-item">
               <div className="legend-box" style={{ background: "#d62828" }}></div>
-              <span>A.R. Crimea, Luhansk</span>
+              <span>A.R. Crimea, Luhansk are considered to be regions with constant alarm</span>
             </div>
           </div>
 
@@ -380,10 +458,13 @@ function App() {
 
             {region === "all" && availableTimes.length > 0 && (
               <div className="time-scroll">
-                {availableTimes.map((time) => {
-                  const count = Object.values(data?.regions_forecast || {}).filter(
-                    (forecast) => forecast?.[time] >= 0.5
-                  ).length;
+                {rotatedTimes.map((time) => {
+                  const count =
+ 		   Object.entries(data?.regions_forecast || {}).filter(
+		    ([regionId, forecast]) =>
+		      ALWAYS_ALARM_REGIONS.includes(regionId) ||
+		      isAlarm(forecast?.[time] ?? 0)
+		  ).length + 2;
 
                   const isSelected = selectedTime === time;
 
@@ -405,211 +486,161 @@ function App() {
         </div>
 
         <div className="right-column">
-          {selectedRegionStats ? (
-            <div className="card">
-              <div className="card-title-row">
-                <span className="card-title">{selectedRegionStats.name}</span>
-                <span className="muted">{selectedTime}</span>
-              </div>
+  {selectedRegionStats ? (
+    <div className="card">
+      <div className="card-title-row">
+        <span className="card-title">{selectedRegionStats.name}</span>
+        <span className="muted">{selectedTime}</span>
+      </div>
 
-              <div className="stats-grid">
-                <div className="stat-box red">
-                  <div className="stat-label">Alarm Hours</div>
-                  <div className="stat-value">{selectedRegionStats.activeCount}</div>
-                  <div className="muted">of 24 total</div>
-                </div>
-
-                <div className="stat-box green">
-                  <div className="stat-label">Day Cover</div>
-                  <div className="stat-value">{selectedRegionStats.coverage}%</div>
-                  <div className="muted">of the day</div>
-                </div>
-
-                <div className="stat-box">
-                  <div className="stat-label">First Alarm</div>
-                  <div className="stat-value" style={{ fontSize: "22px" }}>
-                    {selectedRegionStats.firstAlarm}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginTop: "16px" }}>
-                <div className="stat-label">Alarm windows</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
-                  {selectedRegionStats.activeHours.length > 0 ? (
-                    selectedRegionStats.activeHours.map((time) => (
-                      <span
-                        key={time}
-                        style={{
-                          padding: "6px 8px",
-                          borderRadius: "8px",
-                          background: "#fee2e2",
-                          color: "#dc2626",
-                          fontSize: "12px",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {time}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="muted">No alarms predicted</span>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ marginTop: "18px" }}>
-                <div className="stat-label">24h Timeline</div>
-                <div style={{ display: "flex", gap: "4px", marginTop: "10px" }}>
-                  {availableTimes.map((time) => {
-                    const isActive = data?.regions_forecast?.[selectedRegionId]?.[time] >= 0.5;
-                    const isCurrent = time === selectedTime;
-
-                    return (
-                      <div
-                        key={time}
-                        title={time}
-                        style={{
-                          flex: 1,
-                          height: "30px",
-                          borderRadius: "4px",
-                          background: isActive ? "#ef4444" : "#e5e7eb",
-                          outline: isCurrent ? "2px solid #111827" : "none",
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div style={{ marginTop: "18px" }}>
-                <button onClick={() => setSelectedRegionId(null)}>
-                  Reset region selection
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="card">
-              <div className="card-title-row">
-                <span className="card-title">Statistics</span>
-                <span className="muted">{selectedTime}</span>
-              </div>
-
-              <div className="stats-grid">
-                <div className="stat-box red">
-                  <div className="stat-label">Alarm Regions</div>
-                  <div className="stat-value">{alarmRegionsCount}</div>
-                  <div className="muted">of {totalRegions} total</div>
-                </div>
-
-                <div className="stat-box green">
-                  <div className="stat-label">Clear Regions</div>
-                  <div className="stat-value">{Math.max(0, totalRegions - alarmRegionsCount)}</div>
-                  <div className="muted">of {totalRegions} total</div>
-                </div>
-
-                <div className="stat-box">
-                  <div className="stat-label">Peak Hour</div>
-                  <div className="stat-value" style={{ fontSize: "22px" }}>
-                    {peakHourData.time}
-                  </div>
-                  <div className="muted">{peakHourData.count} regions</div>
-                </div>
-
-                <div className="stat-box">
-                  <div className="stat-label">Coverage</div>
-                  <div className="stat-value">{coveragePercent}%</div>
-                  <div className="muted">of all regions</div>
-                </div>
-              </div>
-
-              <div style={{ marginTop: "18px" }}>
-                <div className="stat-label">Alarm coverage</div>
-                <div
-                  style={{
-                    height: "8px",
-                    background: "#e5e7eb",
-                    borderRadius: "999px",
-                    overflow: "hidden",
-                    marginTop: "8px",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${coveragePercent}%`,
-                      height: "100%",
-                      background: "#ef4444",
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginTop: "18px" }}>
-                <div className="stat-label">24h alarm intensity</div>
-                <div style={{ display: "flex", gap: "2px", marginTop: "10px" }}>
-                  {hourlyAlarmCounts.map(({ time, count }) => {
-                    const opacity = count === 0 ? 0.2 : Math.max(0.25, count / totalRegions);
-                    const isCurrent = time === selectedTime;
-
-                    return (
-                      <div
-                        key={time}
-                        title={`${time} — ${count} regions`}
-                        style={{
-                          flex: 1,
-                          height: "26px",
-                          borderRadius: "4px",
-                          background: `rgba(239,68,68,${opacity})`,
-                          outline: isCurrent ? "2px solid #111827" : "none",
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div style={{ marginTop: "18px" }}>
-                <div className="stat-label">Regions with the highest probability of alarm</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "10px" }}>
-                  {mostAffectedRegions.map((item, index) => (
-                    <div key={item.regionId}>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          marginBottom: "4px",
-                          fontSize: "13px",
-                        }}
-                      >
-                        <span>{index + 1}. {item.name}</span>
-                        <span>
-                          {Math.round(item.probability * 100)}% 
-                          (σ {item.volatility.toFixed(2)})
-                        </span>
-                      </div>
-                      <div
-                        style={{
-                          height: "6px",
-                          background: "#e5e7eb",
-                          borderRadius: "999px",
-                          overflow: "hidden",
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: `${item.probability * 100}%`,
-                            height: "100%",
-                            background: "#ef4444",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
+      <div className="stats-grid">
+        <div className="stat-box red">
+          <div className="stat-label">Alarm Hours</div>
+          <div className="stat-value">{selectedRegionStats.activeCount}</div>
+          <div className="muted">of 24 total</div>
         </div>
+
+        <div className="stat-box green">
+          <div className="stat-label">Day Cover</div>
+          <div className="stat-value">{selectedRegionStats.coverage}%</div>
+          <div className="muted">of the day</div>
+        </div>
+
+        <div className="stat-box">
+          <div className="stat-label">First Predicted  Alarm</div>
+          <div className="stat-value" style={{ fontSize: "22px" }}>
+            {selectedRegionStats.firstAlarm}
+          </div>
+        </div>
+
+        <div className="stat-box">
+ 	  <div className="stat-label">Next Alarm</div>
+ 	  <div className="stat-value">
+	    {selectedRegionStats.nextAlarm === "Now" ? (
+  <span style={{ color: "#ef4444", fontWeight: 700 }}>
+    Now
+  </span>
+) : (
+  selectedRegionStats.nextAlarm
+)}
+	  </div>
+	</div>
+      </div>
+
+      <div style={{ marginTop: "18px" }}>
+        <button 
+	  className="reset-button"
+	  onClick={() => setSelectedRegionId(null)}>
+          Reset region selection
+        </button>
+      </div>
+    </div>
+  ) : (
+    <>
+      {/* STATISTICS */}
+      <div className="card">
+        <div className="card-title-row">
+          <span className="card-title">Statistics</span>
+          <span className="muted">{selectedTime}</span>
+        </div>
+
+        <div className="stats-grid">
+          <div className="stat-box red">
+            <div className="stat-label">Alarm Regions</div>
+            <div className="stat-value">{data ? (alarmRegionsCount + 2) : "-"}</div>
+            <div className="muted">{data ? `of ${totalRegions} total` : "-"}</div>
+          </div>
+
+          <div className="stat-box green">
+            <div className="stat-label">Clear Regions</div>
+            <div className="stat-value">
+              {data ? Math.max(0, totalRegions - alarmRegionsCount - 2) : "-"}
+            </div>
+            <div className="muted">of {totalRegions} total</div>
+          </div>
+
+          <div className="stat-box">
+            <div className="stat-label">Peak Hour</div>
+            <div className="stat-value" style={{ fontSize: "22px" }}>
+              {data ? peakHourData.time : "-"}
+            </div>
+            <div className="muted">{data ? `${peakHourData.count} regions` : "-"}</div>
+          </div>
+
+          <div className="stat-box">
+            <div className="stat-label">Coverage</div>
+            <div className="stat-value">{data ? `${coveragePercent}%` : "-"}</div>
+            <div className="muted">of all regions</div>
+          </div>
+        </div>
+
+	<p className="muted" style={{ marginTop: "6px", fontSize: "12px" }}>
+            Regions with probability ≥ 0.65 (red and dark-red) are considered alarm regions.
+        </p>
+
+        <div style={{ marginTop: "18px" }}>
+          <div className="card-title">
+            Regions with the highest probability of alarm at {selectedTime}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "10px" }}>
+            {mostAffectedRegions.map((item, index) => (
+              <div key={item.regionId}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", fontSize: "13px" }}>
+                  <span>{index + 1}. {item.name}</span>
+                  <span>
+                    {Math.round(item.probability * 100)}%
+                  </span>
+                </div>
+
+                <div style={{ height: "6px", background: "#e5e7eb", borderRadius: "999px", overflow: "hidden" }}>
+                  <div style={{ width: `${item.probability * 100}%`, height: "100%", background: "#ef4444" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* MODEL */}
+      <div className="card">
+        <div className="card-title">Model</div>
+
+        <div className="info-list">
+          <div className="info-row">
+            <span className="info-label">Training:</span>
+            <span className="info-value">
+              {formatDateTime(safeData.last_model_train_time)}
+            </span>
+          </div>
+
+          <div className="info-row">
+            <span className="info-label">Forecast:</span>
+            <span className="info-value">
+              {formatDateTime(safeData.last_prediction_time)}
+            </span>
+          </div>
+
+          <div className="info-row">
+            <span className="info-label">Horizon:</span>
+            <span className="info-value">
+              {safeData.forecast_horizon_hours || 24} hours
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* DEVELOPERS */}
+      <div className="card">
+        <div className="card-title">Developers</div>
+        <p className="developers-text">
+          Developed in March–April 2026 for educational purposes by NaUKMA students
+          Viktoriia Khorunzha, Polina Tkachenko, Mariia Vakorina, and Slava Veles.
+        </p>
+      </div>
+    </>
+  )}
+</div>
       </div>
     </div>
   );

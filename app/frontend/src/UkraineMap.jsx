@@ -40,11 +40,11 @@ function UkraineMap({
     5: { name: "Donetsk", x: 680, y: 340 },
     6: { name: "Zhytomyr", x: 290, y: 170 },
     7: { name: "Uzhgorod", x: 70, y: 310 },
-    8: { name: "Zaporozhye", x: 590, y: 380 },
+    8: { name: "Zaporizhzhia", x: 590, y: 380 },
     9: { name: "Ivano-Frankivsk", x: 130, y: 290 },
     10: { name: "Kyiv", x: 373, y: 180 },
     11: { name: "Kropyvnytskyi", x: 450, y: 310 },
-    12: { name: "Simferopol", x: 530, y: 500 },
+    12: { name: "A.R. Crimea", x: 530, y: 500 },
     13: { name: "Lviv", x: 100, y: 230 },
     14: { name: "Mykolaiv", x: 430, y: 370 },
     15: { name: "Odesa", x: 370, y: 400 },
@@ -58,12 +58,11 @@ function UkraineMap({
     23: { name: "Cherkasy", x: 420, y: 260 },
     24: { name: "Chernivtsi", x: 200, y: 320 },
     25: { name: "Chernihiv", x: 430, y: 120 },
-    26: { name: "Kyivska", x: 370, y: 220 },
+    26: { name: "Kyiv Region", x: 370, y: 220 },
     };
   return (
     <div className="ukraine-map-wrapper">
-        <h3>Forecast map at {selectedTime}</h3>
-
+        
         <svg
             version="1.1"
             xmlns="http://www.w3.org/2000/svg"

@@ -89,7 +89,6 @@ body.dark .card {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin-bottom: 16px;
 }
 
 .card-title {
@@ -98,6 +97,7 @@ body.dark .card {
   letter-spacing: 0.08em;
   font-weight: 700;
   color: #4d4139;
+  margin-bottom: 16px;
 }
 
 body.dark .card-title {
@@ -242,9 +242,9 @@ body.dark .muted {
 }
 
 .map-shell {
-  background: #f5f0ec;
-  border-radius: 14px;
-  padding: 16px;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
   overflow: hidden;
 }
 
@@ -275,4 +275,61 @@ body.dark .map-shell {
   border-radius: 18px;
   padding: 20px;
   min-width: 0;
+}
+.info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.info-label {
+  font-size: 13px;
+  color: #877f77;
+}
+
+.info-value {
+  font-size: 15px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.developers-text {
+  margin: 0;
+  line-height: 1.6;
+  font-size: 14px;
+  color: #4d4139;
+}
+
+body.dark .developers-text {
+  color: #e2e8f0;
+}
+
+.reset-button {
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: none;
+  background: #ef4444;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.reset-button:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+}
+
+.reset-button:active {
+  transform: translateY(0);
+  background: #b91c1c;
 }
