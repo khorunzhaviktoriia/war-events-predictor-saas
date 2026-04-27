@@ -44,6 +44,8 @@ war-events-predictor-saas/
 │
 ├── runners/                  # Runtime scripts for collection, dataset update, prediction and retraining
 │
+├── inference/                # Lightweight demo inference script and inference requirements
+|
 ├── README.md
 ├── requirements.txt
 └── .gitignore
@@ -80,7 +82,7 @@ forecasting/data_merge_feature_engineering.ipynb
         ↓
 data/final_merged_dataset.parquet
         ↓
-model training
+forecasting/models/HistGradientBoostingClassifier.ipynb
         ↓
 models/2__hist_gradient_boosting__v1.pkl
 ```
@@ -170,7 +172,7 @@ Run the notebooks in this order:
 
 5. Model notebooks
    
-   You can only run the top model `forecasting/HistGradientBoostingClassifier.ipynb`.
+   You can only run the top model `forecasting/models/HistGradientBoostingClassifier.ipynb`.
 
 
 ### 2. Run the runtime pipeline
