@@ -6,6 +6,7 @@ import json
 import requests
 import time
 import pandas as pd
+import os
 from bs4 import BeautifulSoup
 from get_weather_24h_OpenMeteo import (
     KYIV_TZ,
@@ -21,7 +22,9 @@ from get_weather_24h_OpenMeteo import (
 )
 
 base_isw_url = "https://understandingwar.org/research/russia-ukraine"
-API_KEY = ''
+API_KEY = os.getenv("UKRAINE_ALARM_API_KEY", "")
+if not API_KEY:
+    raise RuntimeError("Missing UKRAINE_ALARM_API_KEY")
 BASE_URL = "https://api.ukrainealarm.com/api/v3"
 HISTORY_URL = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -170,12 +173,22 @@ def date_alarm(date: datetime) -> json:
             f"{BASE_URL}/alerts/dateHistory",
             headers={"Authorization": API_KEY},
             params={"date": date_str},
+            timeout=30,
         )
+
         if response.status_code == 200:
             return response.json()
-        else:
+
+        if response.status_code == 401:
+            print("Ukraine Alarm API returned 401. Check UKRAINE_ALARM_API_KEY.")
+            continue
+
+        if response.status_code in {429, 500, 502, 503, 504}:
             print(f"Error {response.status_code}. Trying again")
             time.sleep(5)
+            continue
+
+        raise RuntimeError(f"Ukraine Alarm API returned unexpected status {response.status_code}")
 
 
 def save_result(result: dict, hour: datetime) -> None:
@@ -394,16 +407,17 @@ def save_weather_in_period(date_start: datetime) -> None:
 
 def save_everything(date_start: datetime) -> None:
     save_isw_in_period(date_start)
-    save_alarms_in_period(date_start)
     save_weather_in_period(date_start)
+    save_alarms_in_period(date_start)
 
 
 if __name__ == "__main__":
     base_dir = Path(__file__).resolve().parent.parent
     data_path = base_dir / "data" / "final_merged_dataset.parquet"
-    df = pd.read_parquet(data_path)
 
-    first_date = df["datetime_hour"].max()
+    df = pd.read_parquet(data_path, columns = ["datetime_hour"])
+    first_date = pd.to_datetime(df["datetime_hour"], errors="coerce").max()
+
     if first_date.tzinfo is None:
         first_date = first_date.replace(tzinfo=KYIV_TZ)
     first_date = first_date + timedelta(hours=1)

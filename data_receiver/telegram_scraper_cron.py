@@ -5,9 +5,10 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import os
 
-api_id = 0000
-api_hash = ""
+api_id = int(os.getenv("TG_API_ID"))
+api_hash = os.getenv("TG_API_HASH")
 
 channels = [
     "DeepStateUA",
