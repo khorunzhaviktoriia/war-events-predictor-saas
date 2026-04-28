@@ -1,4 +1,3 @@
-=======
 import json
 import pickle
 from dataclasses import dataclass
@@ -822,4 +821,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
->>>>>>> a4b78ac (24 hours prediction code change to Monte-Carlo stimulation)
