@@ -324,3 +324,5 @@ Instead of **<0.0.0.0>**, write the address of the device on which you are runni
 ## User Interface
 
 ![User Interface](images/user_interface.png)
+
+![User Interface](images/user_interface_region.png)
