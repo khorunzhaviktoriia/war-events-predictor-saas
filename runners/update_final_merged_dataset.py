@@ -1,27 +1,22 @@
-"""
-1) read raw snapshots
-2) preprocess the new source-level rows.
-3) append those rows to the old processed source tables
-(final_weather.csv, war_events_processed.csv,isw_processed_svd.csv, telegram_processed_svd.csv)
-4) rebuild final_merged_dataset.parquet from the updated processed sources
-"""
-
-import numpy as np
-import pandas as pd
 import json
 import os
 import pickle
 import re
+import shutil
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
-
+import numpy as np
+import pandas as pd
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 KYIV_TZ = "Europe/Kyiv"
+EXPECTED_REGION_COUNT = 24
+HISTORY_TAIL_HOURS_FOR_UNSHIFTED = 24 * 30
+HISTORY_TAIL_HOURS_FOR_FINAL = 72
 
 NEIGHBOURING_REGIONS = {
     1: [21],
@@ -83,44 +78,76 @@ TG_REGION_COLS = [
     "tg_region_mention_count",
 ]
 
+
 TG_REGION_PATTERNS: dict[int, str] = {
-    2:  r'вінниц',
-    3:  r'волин|луцьк',
-    4:  r'дніпр|дніпропетровськ',
-    5:  r'донецьк|донеччин',
-    6:  r'житомир',
-    7:  r'закарпат|ужгород',
-    8:  r'запоріж',
-    9:  r'івано.франків',
-    10: r'київськ|київщин',
-    11: r'кіровоград|кропивницьк',
-    13: r'львів',
-    14: r'миколаїв',
-    15: r'одес',
-    16: r'полтав',
-    17: r'рівн',
-    18: r'сум',
-    19: r'тернопіл',
-    20: r'харків|харківщин',
-    21: r'херсон',
-    22: r'хмельниц',
-    23: r'черкас',
-    24: r'чернівц',
-    25: r'чернігів',
-    26: r'київ(?!ськ)',
+    2: r"вінниц",
+    3: r"волин|луцьк",
+    4: r"дніпр|дніпропетровськ",
+    5: r"донецьк|донеччин",
+    6: r"житомир",
+    7: r"закарпат|ужгород",
+    8: r"запоріж",
+    9: r"івано.франків",
+    10: r"київськ|київщин",
+    11: r"кіровоград|кропивницьк",
+    13: r"львів",
+    14: r"миколаїв",
+    15: r"одес",
+    16: r"полтав",
+    17: r"рівн",
+    18: r"сум",
+    19: r"тернопіл",
+    20: r"харків|харківщин",
+    21: r"херсон",
+    22: r"хмельниц",
+    23: r"черкас",
+    24: r"чернівц",
+    25: r"чернігів",
+    26: r"київ(?!ськ)",
 }
 
-TG_THREAT_PATTERN = r'загроза|виліт|пуск|ракет|шахед|герань|бпла|дрон|балістич|крилат'
-TG_ALLCLEAR_PATTERN = r'відбій'
+TG_THREAT_PATTERN = r"загроза|виліт|пуск|ракет|шахед|герань|бпла|дрон|балістич|крилат"
+TG_ALLCLEAR_PATTERN = r"відбій"
+
+UNSHIFTED_DERIVED_COLS = {
+    "alarm_lag_1",
+    "alarm_lag_3",
+    "alarm_lag_6",
+    "alarm_lag_12",
+    "alarms_in_last_24h",
+    "is_weekend",
+    "is_night",
+    "total_active_alarms_lag1",
+    "neighbour_alarms",
+    "hours_since_last_alarm",
+    "isw_total_intensity",
+    "isw_topic_std",
+    "isw_topic_max",
+    "isw_topic_mean",
+    "isw_topic_entropy",
+    "isw_velocity_24h",
+    "isw_intensity_ema",
+    "tg_total_intensity",
+    "tg_topic_std",
+    "tg_topic_max",
+    "tg_topic_entropy",
+    "tg_velocity_3h",
+    "tg_intensity_ema_6h",
+    "tg_intensity_zscore",
+}
+
 
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+
 def log(msg: str) -> None:
     print(f"[{now_str()}] {msg}")
 
+
 def warn(msg: str) -> None:
     print(f"[{now_str()}] WARNING: {msg}")
+
 
 @dataclass
 class ProjectPaths:
@@ -129,11 +156,7 @@ class ProjectPaths:
     snapshots: Path
     artifacts_dir: Path
     runtime_dir: Path
-    weather_csv: Path
-    alarms_csv: Path
-    isw_csv: Path
-    telegram_csv: Path
-    tg_region_csv: Path
+    unshifted_parquet: Path
     final_parquet: Path
 
     @classmethod
@@ -146,17 +169,11 @@ class ProjectPaths:
             snapshots=data_dir / "raw_snapshots",
             artifacts_dir=data_dir / "nlp_artifacts",
             runtime_dir=data_dir / "runtime",
-            weather_csv=data_dir / "final_weather.csv",
-            alarms_csv=data_dir / "war_events_processed.csv",
-            isw_csv=data_dir / "isw_processed_svd.csv",
-            telegram_csv=data_dir / "telegram_processed_svd.csv",
-            tg_region_csv=data_dir / "tg_region_features.csv",
+            unshifted_parquet=data_dir / "merged_sources_unshifted.parquet",
             final_parquet=data_dir / "final_merged_dataset.parquet",
         )
 
     def validate(self) -> None:
-        required_files = [self.weather_csv, self.alarms_csv, self.isw_csv, self.telegram_csv, self.tg_region_csv, self.final_parquet]
-
         if not self.snapshots.exists() or not self.snapshots.is_dir():
             raise FileNotFoundError(
                 f"Missing snapshots folder: {self.snapshots}. Expected: data/raw_snapshots/"
@@ -165,9 +182,15 @@ class ProjectPaths:
             raise FileNotFoundError(
                 f"Missing NLP artifacts folder: {self.artifacts_dir}. Expected: data/nlp_artifacts/"
             )
-        for path in required_files:
-            if not path.exists():
-                raise FileNotFoundError(f"Missing required file: {path}")
+        if not self.unshifted_parquet.exists():
+            raise FileNotFoundError(
+                f"Missing {self.unshifted_parquet}. Run the historical merge notebook first so it saves "
+                "data/merged_sources_unshifted.parquet before the final shifts."
+            )
+        if not self.final_parquet.exists():
+            raise FileNotFoundError(
+                f"Missing {self.final_parquet}. Run the historical merge notebook first."
+            )
 
 
 @dataclass
@@ -187,98 +210,38 @@ class SnapshotStore:
             return []
         return sorted(base.rglob("*.json"))
 
-    def read_json(self, path_ref: str | Path) -> Any:
+    @staticmethod
+    def read_json(path_ref: str | Path) -> Any:
         with open(path_ref, "r", encoding="utf-8") as f:
             return json.load(f)
-
-
-
-def read_parquet_any(path: str | os.PathLike[str], columns: list[str] | None = None) -> pd.DataFrame:
-    try:
-        return pd.read_parquet(path, columns=columns)
-    except Exception as exc:
-        raise RuntimeError(
-            "Could not read parquet. Install pyarrow or fastparquet in the project environment."
-        ) from exc
-
-def write_parquet_any(df: pd.DataFrame, path: str | os.PathLike[str]) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        df.to_parquet(path, index=False)
-    except Exception as exc:
-        raise RuntimeError(
-            "Could not write parquet. Install pyarrow or fastparquet in the project environment."
-        ) from exc
-
-
-
-def read_csv_header(path: Path) -> list[str]:
-    if not path.exists():
-        return []
-    return list(pd.read_csv(path, nrows=0).columns)
-
-def append_csv_rows(path: Path, df: pd.DataFrame) -> None:
-    if df.empty:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    header = not path.exists()
-    df.to_csv(path, mode="a", header=header, index=False, encoding="utf-8")
-
-
-def csv_max_timestamp(path: Path, column: str, is_date_only: bool = False, chunksize: int = 200_000) -> pd.Timestamp | None:
-    if not path.exists():
-        return None
-    max_val: pd.Timestamp | None = None
-    for chunk in pd.read_csv(path, usecols=[column], chunksize=chunksize):
-        dt = pd.to_datetime(chunk[column], errors="coerce")
-        if is_date_only:
-            dt = dt.dt.floor("D")
-        cur = dt.max()
-        if pd.notna(cur):
-            max_val = cur if max_val is None else max(max_val, cur)
-    return max_val
-
-def csv_region_dim(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"Processed source file not found: {path}")
-    df = pd.read_csv(path, usecols=["region_id", "region_key"], low_memory=False)
-    df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
-    df = df[df["region_id"].notna()].copy()
-    df["region_id"] = df["region_id"].astype(int)
-    df = df.drop_duplicates().sort_values(["region_id", "region_key"]).reset_index(drop=True)
-    return df
-
-def load_csv_full(path: Path, **kwargs: Any) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(path)
-    return pd.read_csv(path, low_memory=False, **kwargs)
-
 
 
 def infer_completed_hour(tz: str = KYIV_TZ) -> pd.Timestamp:
     return pd.Timestamp.now(tz=tz).tz_localize(None).floor("h") - pd.Timedelta(hours=1)
 
+
 def remove_spring_dst_hour(df: pd.DataFrame, dt_col: str = "datetime_hour") -> pd.DataFrame:
-    if df.empty:
+    if df.empty or dt_col not in df.columns:
         return df
-    years = sorted(pd.to_datetime(df[dt_col]).dt.year.dropna().unique())
+    years = sorted(pd.to_datetime(df[dt_col], errors="coerce").dt.year.dropna().unique())
     rows_to_remove: list[pd.Timestamp] = []
     for year in years:
-        last_day = pd.Timestamp(year=year, month=3, day=31)
+        last_day = pd.Timestamp(year=int(year), month=3, day=31)
         while last_day.weekday() != 6:
             last_day -= pd.Timedelta(days=1)
         rows_to_remove.append(last_day.replace(hour=3, minute=0, second=0))
-    mask = pd.to_datetime(df[dt_col]).isin(rows_to_remove)
+    mask = pd.to_datetime(df[dt_col], errors="coerce").isin(rows_to_remove)
     removed = int(mask.sum())
     if removed:
-        warn(f"Removing {removed} rows that match the old spring-DST cleanup rule.")
+        warn(f"Removing {removed} rows matching spring-DST cleanup rule.")
     return df.loc[~mask].copy()
+
 
 def ensure_date_string_col(df: pd.DataFrame, col: str) -> pd.DataFrame:
     if col in df.columns:
         df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
     return df
+
 
 def coerce_bool_columns(df: pd.DataFrame, bool_cols: Iterable[str]) -> pd.DataFrame:
     for col in bool_cols:
@@ -286,26 +249,6 @@ def coerce_bool_columns(df: pd.DataFrame, bool_cols: Iterable[str]) -> pd.DataFr
             df[col] = df[col].fillna(False).astype(bool)
     return df
 
-def align_to_template_columns(df: pd.DataFrame, template_columns: list[str]) -> pd.DataFrame:
-    if not template_columns:
-        return df
-    out = df.copy()
-    for col in template_columns:
-        if col not in out.columns:
-            if col.startswith("hour_conditions_simple_"):
-                out[col] = False
-            elif col in {"alarm_active", "region_id", "day_of_week", "hour"}:
-                out[col] = 0
-            elif re.fullmatch(r"(isw|tg)_topic_\d+", col):
-                out[col] = 0.0
-            elif col in {*TG_REGION_COLS}:
-                out[col] = 0
-            else:
-                out[col] = 0
-    extras = [c for c in out.columns if c not in template_columns]
-    if extras:
-        out = out.drop(columns=extras)
-    return out[template_columns].copy()
 
 def safe_entropy_from_abs(df_values: pd.DataFrame) -> pd.Series:
     row_sums = df_values.sum(axis=1)
@@ -313,11 +256,297 @@ def safe_entropy_from_abs(df_values: pd.DataFrame) -> pd.Series:
     entropy = -(probs * np.log(probs + 1e-9)).sum(axis=1)
     return entropy.fillna(0)
 
+
 def hours_since_last_alarm_vectorized(series: pd.Series) -> pd.Series:
     shifted = series.shift(1).fillna(0)
     alarm_cumsum = shifted.cumsum()
     result = shifted.groupby(alarm_cumsum).cumcount()
     return result.astype(float)
+
+
+def maybe_file_relevant_by_name(path_ref: Path, start_hour: pd.Timestamp, end_hour: pd.Timestamp) -> bool:
+    text = str(path_ref)
+    matches = re.findall(r"(20\d{2})[-_](\d{2})[-_](\d{2})", text)
+    if not matches:
+        return True
+    dates = [pd.Timestamp(year=int(y), month=int(m), day=int(d)) for y, m, d in matches]
+    start_day = start_hour.floor("D") - pd.Timedelta(days=1)
+    end_day = end_hour.floor("D") + pd.Timedelta(days=1)
+    return any(start_day <= d <= end_day for d in dates)
+
+
+
+
+def _require_pyarrow() -> None:
+    try:
+        import pyarrow
+    except ImportError as exc:
+        raise RuntimeError("This runner needs pyarrow to read/write parquet files.") from exc
+
+
+def parquet_schema(path: Path) -> dict[str, Any]:
+    _require_pyarrow()
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
+    path = Path(path)
+    if path.is_dir():
+        schema = ds.dataset(str(path), format="parquet").schema
+    else:
+        schema = pq.read_schema(path)
+    return {
+        "columns": list(schema.names),
+        "dtypes": {name: str(schema.field(name).type) for name in schema.names},
+    }
+
+
+def read_parquet_any(
+    path: str | os.PathLike[str],
+    columns: list[str] | None = None,
+    filters: Any | None = None,
+) -> pd.DataFrame:
+    try:
+        kwargs: dict[str, Any] = {}
+        if columns is not None:
+            kwargs["columns"] = columns
+        if filters is not None:
+            kwargs["filters"] = filters
+        return pd.read_parquet(path, **kwargs)
+    except Exception as exc:
+        raise RuntimeError("Could not read parquet. Install pyarrow in the project environment.") from exc
+
+
+def write_single_parquet_file_atomic(df: pd.DataFrame, path: Path) -> None:
+    _require_pyarrow()
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + f".__tmp_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.parquet")
+    df.to_parquet(tmp_path, index=False, engine="pyarrow")
+
+    if path.exists():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    tmp_path.replace(path)
+
+
+def ensure_single_parquet_file(path: Path, label: str) -> None:
+    path = Path(path)
+    if not path.exists() or not path.is_dir():
+        return
+    log(f"Converting existing {label} directory back to a single parquet file")
+    df = read_parquet_any(path)
+    write_single_parquet_file_atomic(df, path)
+    log(f"{label} is now a single parquet file again: {path}")
+
+
+def parquet_max_timestamp(path: Path, column: str) -> pd.Timestamp | None:
+    if not Path(path).exists():
+        return None
+    df = read_parquet_any(path, columns=[column])
+    if df.empty:
+        return None
+    dt = pd.to_datetime(df[column], errors="coerce")
+    mx = dt.max()
+    return None if pd.isna(mx) else pd.Timestamp(mx).tz_localize(None) if getattr(mx, "tzinfo", None) else pd.Timestamp(mx)
+
+
+def read_parquet_tail_by_hours(path: Path, max_hour: pd.Timestamp, tail_hours: int) -> pd.DataFrame:
+    start = max_hour - pd.Timedelta(hours=tail_hours)
+    try:
+        df = read_parquet_any(path, filters=[("datetime_hour", ">=", start)])
+    except Exception:
+        df = read_parquet_any(path)
+        df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+        df = df[df["datetime_hour"] >= start].copy()
+    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+    df = df[df["datetime_hour"].notna()].copy()
+    return df.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
+
+
+def read_parquet_range_by_hours(
+    path: Path,
+    start_hour: pd.Timestamp,
+    end_hour: pd.Timestamp,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    start_hour = pd.Timestamp(start_hour)
+    end_hour = pd.Timestamp(end_hour)
+    try:
+        df = read_parquet_any(
+            path,
+            columns=columns,
+            filters=[
+                ("datetime_hour", ">=", start_hour),
+                ("datetime_hour", "<=", end_hour),
+            ],
+        )
+    except Exception:
+        df = read_parquet_any(path, columns=columns)
+        df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+        df = df[(df["datetime_hour"] >= start_hour) & (df["datetime_hour"] <= end_hour)].copy()
+
+    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+    df = df[df["datetime_hour"].notna()].copy()
+    if "region_id" in df.columns:
+        df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
+        df = df[df["region_id"].notna()].copy()
+        df["region_id"] = df["region_id"].astype(int)
+    sort_cols = [c for c in ["datetime_hour", "region_id"] if c in df.columns]
+    return df.sort_values(sort_cols).reset_index(drop=True) if sort_cols else df.reset_index(drop=True)
+
+
+def find_earliest_missing_final_hour(
+    unshifted_path: Path,
+    final_path: Path,
+    start_hour: pd.Timestamp,
+    end_hour: pd.Timestamp,
+) -> pd.Timestamp | None:
+
+    key_cols = ["datetime_hour", "region_id"]
+    expected = read_parquet_range_by_hours(unshifted_path, start_hour, end_hour, columns=key_cols)
+    if expected.empty:
+        return None
+    expected = expected.drop_duplicates(key_cols)
+
+    if not Path(final_path).exists():
+        return pd.Timestamp(expected["datetime_hour"].min())
+
+    existing = read_parquet_range_by_hours(final_path, start_hour, end_hour, columns=key_cols)
+    if existing.empty:
+        return pd.Timestamp(expected["datetime_hour"].min())
+    existing = existing.drop_duplicates(key_cols)
+
+    merged = expected.merge(existing, on=key_cols, how="left", indicator=True)
+    missing = merged[merged["_merge"] == "left_only"]
+    if missing.empty:
+        return None
+    return pd.Timestamp(missing["datetime_hour"].min())
+
+
+def log_recent_dataset_health(path: Path, label: str, lookback_days: int = 60) -> None:
+    max_hour = parquet_max_timestamp(path, "datetime_hour")
+    if max_hour is None:
+        warn(f"{label}: could not read max datetime_hour")
+        return
+    start = max_hour - pd.Timedelta(days=lookback_days)
+    keys = read_parquet_range_by_hours(path, start, max_hour, columns=["datetime_hour", "region_id"])
+    if keys.empty:
+        warn(f"{label}: no rows in the last {lookback_days} days")
+        return
+    dups = int(keys.duplicated(["datetime_hour", "region_id"]).sum())
+    counts = keys.groupby("datetime_hour")["region_id"].nunique()
+    bad_hours = int((counts != 24).sum())
+    log(
+        f"{label} health: max={max_hour}, recent_rows={len(keys):,}, "
+        f"recent_hours={counts.size:,}, duplicate_keys={dups}, hours_with_not_24_regions={bad_hours}"
+    )
+
+
+def rewrite_parquet_file_with_new_rows(
+    path: Path,
+    new_rows: pd.DataFrame,
+    label: str,
+    key_cols: list[str] | None = None,
+) -> None:
+    if new_rows.empty:
+        log(f"No new rows for {label}; file was not rewritten")
+        return
+
+    path = Path(path)
+    if path.exists():
+        existing = read_parquet_any(path)
+        combined = pd.concat([existing, new_rows], ignore_index=True)
+    else:
+        combined = new_rows.copy()
+
+    if "datetime_hour" in combined.columns:
+        combined["datetime_hour"] = pd.to_datetime(combined["datetime_hour"], errors="coerce")
+
+    if key_cols:
+        missing_keys = [c for c in key_cols if c not in combined.columns]
+        if missing_keys:
+            raise ValueError(f"Cannot deduplicate {label}; missing key columns: {missing_keys}")
+        combined = (
+            combined.sort_values(key_cols)
+            .drop_duplicates(subset=key_cols, keep="last")
+            .reset_index(drop=True)
+        )
+    else:
+        combined = combined.reset_index(drop=True)
+
+    sort_cols = [c for c in ["datetime_hour", "region_id"] if c in combined.columns]
+    if sort_cols:
+        combined = combined.sort_values(sort_cols).reset_index(drop=True)
+
+    write_single_parquet_file_atomic(combined, path)
+    log(f"Rewrote {label} as a single parquet file: +{len(new_rows):,} rows, total {len(combined):,} rows")
+
+
+def cast_series_to_dtype(series: pd.Series, dtype_str: str) -> pd.Series:
+    dtype_str = str(dtype_str).lower()
+    try:
+        if "timestamp" in dtype_str or "datetime" in dtype_str:
+            return pd.to_datetime(series, errors="coerce")
+        if dtype_str.startswith("date32") or dtype_str.startswith("date64") or dtype_str == "date":
+            return pd.to_datetime(series, errors="coerce").dt.date
+        if dtype_str in {"bool", "boolean"}:
+            return series.fillna(False).astype(bool)
+        if dtype_str.startswith("int") or dtype_str in {"int8", "int16", "int32", "int64"}:
+            return pd.to_numeric(series, errors="coerce").fillna(0).astype("int64")
+        if dtype_str.startswith("uint"):
+            return pd.to_numeric(series, errors="coerce").fillna(0).astype("uint64")
+        if dtype_str.startswith("float") or dtype_str in {"double"}:
+            return pd.to_numeric(series, errors="coerce").fillna(0.0).astype("float64")
+        if dtype_str in {"string", "large_string"}:
+            return series.astype("string")
+        return series
+    except Exception:
+        return series
+
+
+def default_value_for_column(col: str) -> Any:
+    if col.startswith("hour_conditions_simple_"):
+        return False
+    if col in {"alarm_active", "region_id", "day_of_week", "hour", "is_weekend", "is_night"}:
+        return 0
+    if re.fullmatch(r"(isw|tg)_topic_\d+", col):
+        return 0.0
+    if col in TG_REGION_COLS:
+        return 0
+    if col.endswith("_count"):
+        return 0
+    return 0
+
+
+def align_to_schema(
+    df: pd.DataFrame,
+    schema: dict[str, Any],
+    *,
+    strict_extra: bool = False,
+    strict_missing: bool = False,
+) -> pd.DataFrame:
+    expected_cols = schema["columns"]
+    expected_dtypes = schema["dtypes"]
+    out = df.copy()
+    missing = [c for c in expected_cols if c not in out.columns]
+    extra = [c for c in out.columns if c not in expected_cols]
+
+    if strict_missing and missing:
+        raise ValueError(f"Schema drift: missing columns {missing}")
+    if strict_extra and extra:
+        raise ValueError(f"Schema drift: unexpected columns {extra}")
+
+    for col in missing:
+        out[col] = default_value_for_column(col)
+    if extra:
+        out = out.drop(columns=extra)
+
+    out = out[expected_cols].copy()
+    for col in expected_cols:
+        out[col] = cast_series_to_dtype(out[col], expected_dtypes.get(col, "object"))
+    return out
 
 
 
@@ -337,6 +566,7 @@ def ensure_nltk_resources() -> None:
         except LookupError:
             log(f"Downloading NLTK resource: {download_name}")
             nltk.download(download_name, quiet=True)
+
 
 class ISWTextPreprocessor:
     def __init__(self) -> None:
@@ -382,15 +612,15 @@ class ISWTextPreprocessor:
         lemmas = [self.lemmatizer.lemmatize(word, self.get_wordnet_pos(tag)) for word, tag in tagged]
         return " ".join(lemmas)
 
+
 def lazy_import_tg_clean_deps():
     try:
         import pymorphy3
         from stop_words import get_stop_words
     except ImportError as exc:
-        raise RuntimeError(
-            "Telegram preprocessing needs pymorphy3 and stop-words. Install them first."
-        ) from exc
+        raise RuntimeError("Telegram preprocessing needs pymorphy3 and stop-words. Install them first.") from exc
     return pymorphy3, get_stop_words
+
 
 class TelegramTextPreprocessor:
     def __init__(self) -> None:
@@ -417,32 +647,15 @@ class TelegramTextPreprocessor:
 
 
 
-def preprocess_weather_new_rows(
-    store: SnapshotStore,
-    template_columns: list[str],
-    completed_hour: pd.Timestamp,
-    existing_max: pd.Timestamp | None,
-) -> pd.DataFrame:
-    files = store.list_json_files("weather_historical")
-    if not files:
-        raise FileNotFoundError("No weather_historical snapshot files were found.")
-
-    rows: list[dict[str, Any]] = []
-    for path_ref in files:
-        payload = store.read_json(path_ref)
-        for item in payload.get("regions", []):
-            weather = dict(item.get("weather", {}))
-            weather.setdefault("region_id", item.get("region_id"))
-            weather.setdefault("region_key", item.get("region"))
-            rows.append(weather)
-
-    df = pd.DataFrame(rows)
+def prepare_weather_frame(df: pd.DataFrame, start_hour: pd.Timestamp, end_hour: pd.Timestamp) -> pd.DataFrame:
     if df.empty:
         return df
-
+    df = df.copy()
     df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
     df = df[df["datetime_hour"].notna()].copy()
-    df = df[df["datetime_hour"] <= completed_hour].copy()
+    df = df[(df["datetime_hour"] >= start_hour) & (df["datetime_hour"] <= end_hour)].copy()
+    if df.empty:
+        return df
     df = remove_spring_dst_hour(df, dt_col="datetime_hour")
 
     for col in [
@@ -458,7 +671,6 @@ def preprocess_weather_new_rows(
             med = df[col].median()
             if pd.notna(med):
                 df[col] = df[col].fillna(med)
-
     if "hour_precip" in df.columns:
         df["hour_precip"] = pd.to_numeric(df["hour_precip"], errors="coerce").fillna(0)
 
@@ -472,23 +684,50 @@ def preprocess_weather_new_rows(
     df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
     df = df[df["region_id"].notna()].copy()
     df["region_id"] = df["region_id"].astype(int)
-    df = ensure_date_string_col(df, "day_datetime")
+
+    if "day_datetime" not in df.columns:
+        df["day_datetime"] = df["datetime_hour"].dt.strftime("%Y-%m-%d")
+    else:
+        df = ensure_date_string_col(df, "day_datetime")
+    if "hour" not in df.columns:
+        df["hour"] = df["datetime_hour"].dt.hour
+    if "day_of_week" not in df.columns:
+        df["day_of_week"] = df["datetime_hour"].dt.dayofweek
 
     df = (
         df.sort_values(["datetime_hour", "region_id"])
-        .drop_duplicates(subset=["datetime_hour", "region_id"], keep="last")
+        .drop_duplicates(["datetime_hour", "region_id"], keep="last")
         .reset_index(drop=True)
     )
-    if existing_max is not None:
-        df = df[df["datetime_hour"] > existing_max].copy()
-    df = align_to_template_columns(df, template_columns)
     return df
+
+
+def preprocess_weather_new_rows(store: SnapshotStore, start_hour: pd.Timestamp, end_hour: pd.Timestamp) -> pd.DataFrame:
+    files = store.list_json_files("weather_historical")
+    if not files:
+        raise FileNotFoundError("No weather_historical snapshot files were found.")
+
+    rows: list[dict[str, Any]] = []
+    for path_ref in files:
+        if not maybe_file_relevant_by_name(path_ref, start_hour, end_hour):
+            continue
+        payload = store.read_json(path_ref)
+        for item in payload.get("regions", []):
+            weather = dict(item.get("weather", {}))
+            dt = pd.to_datetime(weather.get("datetime_hour"), errors="coerce")
+            if pd.isna(dt) or dt < start_hour or dt > end_hour:
+                continue
+            weather.setdefault("region_id", item.get("region_id"))
+            weather.setdefault("region_key", item.get("region"))
+            rows.append(weather)
+
+    return prepare_weather_frame(pd.DataFrame(rows), start_hour, end_hour)
+
 
 def preprocess_alarms_new_rows(
     store: SnapshotStore,
-    template_columns: list[str],
-    completed_hour: pd.Timestamp,
-    existing_max: pd.Timestamp | None,
+    start_hour: pd.Timestamp,
+    end_hour: pd.Timestamp,
     region_dim: pd.DataFrame,
 ) -> pd.DataFrame:
     files = store.list_json_files("alarms_hourly")
@@ -497,67 +736,75 @@ def preprocess_alarms_new_rows(
 
     rows: list[dict[str, Any]] = []
     for path_ref in files:
+        if not maybe_file_relevant_by_name(path_ref, start_hour, end_hour):
+            continue
         payload = store.read_json(path_ref)
         if isinstance(payload, list):
-            rows.extend(payload)
+            for row in payload:
+                dt = pd.to_datetime(row.get("datetime_hour"), errors="coerce")
+                if pd.isna(dt) or dt < start_hour or dt > end_hour:
+                    continue
+                rows.append(row)
 
     df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-
-    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
-    df = df[df["datetime_hour"].notna()].copy()
-    df = df[df["datetime_hour"] <= completed_hour].copy()
-    df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
-    df = df[df["region_id"].notna()].copy()
-    df["region_id"] = df["region_id"].astype(int)
-    df["alarm_active"] = pd.to_numeric(df["alarm_active"], errors="coerce").fillna(0).astype(int)
-
-    df = (
-        df.sort_values(["datetime_hour", "region_id"])
-        .drop_duplicates(subset=["datetime_hour", "region_id"], keep="last")
-        .reset_index(drop=True)
-    )
-
-    if existing_max is not None:
-        start_dt = max(df["datetime_hour"].min(), existing_max + pd.Timedelta(hours=1))
+    if not df.empty:
+        df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+        df = df[df["datetime_hour"].notna()].copy()
+        df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
+        df = df[df["region_id"].notna()].copy()
+        df["region_id"] = df["region_id"].astype(int)
+        df["alarm_active"] = pd.to_numeric(df.get("alarm_active", 0), errors="coerce").fillna(0).astype(int)
+        if "alarm_minutes_in_hour" in df.columns:
+            df["alarm_minutes_in_hour"] = pd.to_numeric(df["alarm_minutes_in_hour"], errors="coerce").fillna(0.0)
+        else:
+            df["alarm_minutes_in_hour"] = 0.0
+        df = (
+            df.sort_values(["datetime_hour", "region_id"])
+            .drop_duplicates(["datetime_hour", "region_id"], keep="last")
+            .reset_index(drop=True)
+        )
     else:
-        start_dt = df["datetime_hour"].min()
-    end_dt = df["datetime_hour"].max()
-    if pd.isna(start_dt) or pd.isna(end_dt) or start_dt > end_dt:
-        return pd.DataFrame(columns=template_columns or ["datetime_hour", "region_id", "region_key", "alarm_minutes_in_hour", "alarm_active"])
+        df = pd.DataFrame(columns=["datetime_hour", "region_id", "alarm_active", "alarm_minutes_in_hour"])
 
-    all_hours = pd.date_range(start_dt, end_dt, freq="h")
+    all_hours = pd.date_range(start_hour, end_hour, freq="h")
     backbone = (
         pd.MultiIndex.from_product([all_hours, region_dim["region_id"]], names=["datetime_hour", "region_id"])
         .to_frame(index=False)
         .merge(region_dim, on="region_id", how="left")
     )
-
-    df = df[["datetime_hour", "region_id", "alarm_active"]].copy()
-    out = backbone.merge(df, on=["datetime_hour", "region_id"], how="left")
-    out["alarm_active"] = out["alarm_active"].fillna(0).astype(int)
-    out["alarm_minutes_in_hour"] = 0.0
+    out = backbone.merge(
+        df[["datetime_hour", "region_id", "alarm_active", "alarm_minutes_in_hour"]],
+        on=["datetime_hour", "region_id"],
+        how="left",
+    )
+    out["alarm_active"] = pd.to_numeric(out["alarm_active"], errors="coerce").fillna(0).astype(int)
+    out["alarm_minutes_in_hour"] = pd.to_numeric(out["alarm_minutes_in_hour"], errors="coerce").fillna(0.0)
     out = remove_spring_dst_hour(out, dt_col="datetime_hour")
-    out = out.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
-    out = align_to_template_columns(out, template_columns)
-    return out
+    return out.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
+
 
 def preprocess_isw_new_rows(
     store: SnapshotStore,
     topic_columns: list[str],
-    existing_max_date: pd.Timestamp | None,
+    start_hour: pd.Timestamp,
+    end_hour: pd.Timestamp,
     artifacts_dir: Path,
 ) -> pd.DataFrame:
     files = store.list_json_files("isw_reports")
     if not files:
         raise FileNotFoundError("No isw_reports snapshot files were found.")
 
+    start_date = start_hour.floor("D")
+    end_date = end_hour.floor("D")
     rows: list[dict[str, Any]] = []
     for path_ref in files:
+        if not maybe_file_relevant_by_name(path_ref, start_hour, end_hour):
+            continue
         payload = store.read_json(path_ref)
         if isinstance(payload, dict):
-            rows.append(payload)
+            dt = pd.to_datetime(payload.get("date"), errors="coerce")
+            if pd.notna(dt) and start_date <= dt.floor("D") <= end_date:
+                rows.append(payload)
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -570,16 +817,15 @@ def preprocess_isw_new_rows(
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df[df["date"].notna()].copy()
-    df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
-    if existing_max_date is not None:
-        df = df[df["date"] > existing_max_date].copy()
-
+    df = df.sort_values("date").drop_duplicates(["date"], keep="last").reset_index(drop=True)
     if df.empty:
-        out = pd.DataFrame(columns=["date", *topic_columns])
-        return out
+        return pd.DataFrame(columns=["date", *topic_columns])
 
     pre = ISWTextPreprocessor()
     df = df.dropna(subset=["title", "url", "text"]).copy()
+    if df.empty:
+        return pd.DataFrame(columns=["date", *topic_columns])
+
     df["text"] = df["text"].apply(pre.clean_isw_text)
     df["text_final"] = df["text"].apply(pre.smart_preprocess_cached)
 
@@ -605,29 +851,28 @@ def preprocess_isw_new_rows(
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
     return out
 
+
 def normalize_telegram_dates_to_local(series: pd.Series) -> pd.Series:
     dt = pd.to_datetime(series, utc=True, errors="coerce")
     return dt.dt.tz_convert(KYIV_TZ).dt.tz_localize(None)
 
-def preprocess_telegram_new_rows(
-    store: SnapshotStore,
-    topic_columns: list[str],
-    existing_max_dt: pd.Timestamp | None,
-    artifacts_dir: Path,
-) -> pd.DataFrame:
+
+def read_telegram_messages_new(store: SnapshotStore, start_hour: pd.Timestamp, end_hour: pd.Timestamp) -> pd.DataFrame:
     files = store.list_json_files("telegram")
     if not files:
         raise FileNotFoundError("No telegram snapshot files were found.")
 
     rows: list[dict[str, Any]] = []
     for path_ref in files:
+        if not maybe_file_relevant_by_name(path_ref, start_hour, end_hour):
+            continue
         payload = store.read_json(path_ref)
         if isinstance(payload, list):
             rows.extend(payload)
 
     df = pd.DataFrame(rows)
     if df.empty:
-        return pd.DataFrame(columns=["date", "channel", *topic_columns])
+        return pd.DataFrame(columns=TELEGRAM_TEXT_TOPLEVEL_COLUMNS)
 
     for col in TELEGRAM_TEXT_TOPLEVEL_COLUMNS:
         if col not in df.columns:
@@ -635,16 +880,24 @@ def preprocess_telegram_new_rows(
 
     df["date"] = normalize_telegram_dates_to_local(df["date"])
     df = df[df["date"].notna()].copy()
-    if existing_max_dt is not None:
-        df = df[df["date"] > existing_max_dt].copy()
-
+    df["datetime_hour"] = df["date"].dt.floor("h")
+    df = df[(df["datetime_hour"] >= start_hour) & (df["datetime_hour"] <= end_hour)].copy()
     if df.empty:
-        out = pd.DataFrame(columns=["date", "channel", *topic_columns])
-        return out
-
+        return pd.DataFrame(columns=[*TELEGRAM_TEXT_TOPLEVEL_COLUMNS, "datetime_hour"])
     df["message"] = df["message"].astype(str)
     df["channel"] = df["channel"].astype(str)
+    return df.reset_index(drop=True)
 
+
+def build_telegram_hourly_topics(
+    telegram_raw_df: pd.DataFrame,
+    topic_columns: list[str],
+    artifacts_dir: Path,
+) -> pd.DataFrame:
+    if telegram_raw_df.empty:
+        return pd.DataFrame(columns=["datetime_hour", *topic_columns])
+
+    df = telegram_raw_df.copy()
     pre = TelegramTextPreprocessor()
     df["message_clean"] = df["message"].apply(pre.fast_tg_clean_optimized)
 
@@ -666,39 +919,22 @@ def preprocess_telegram_new_rows(
         )
 
     topic_df = pd.DataFrame(X_reduced, columns=topic_columns, index=df.index)
-    out = pd.concat([df[["date", "channel"]].copy(), topic_df], axis=1)
-    out = out.drop_duplicates(keep="last").sort_values(["date", "channel"]).reset_index(drop=True)
-    return out
+    msg_features = pd.concat([df[["datetime_hour"]].copy(), topic_df], axis=1)
+    hourly = (
+        msg_features.groupby("datetime_hour", as_index=False)[topic_columns]
+        .mean()
+        .sort_values("datetime_hour")
+        .reset_index(drop=True)
+    )
+    return hourly
 
-def preprocess_tg_region_new_rows(store: SnapshotStore,existing_max_dt: pd.Timestamp | None,) -> pd.DataFrame:
-    files = store.list_json_files("telegram")
-    if not files:
+
+def build_tg_region_features(telegram_raw_df: pd.DataFrame) -> pd.DataFrame:
+    if telegram_raw_df.empty:
         return pd.DataFrame(columns=["datetime_hour", "region_id", *TG_REGION_COLS])
 
-    rows: list[dict[str, Any]] = []
-    for path_ref in files:
-        payload = store.read_json(path_ref)
-        if isinstance(payload, list):
-            rows.extend(payload)
-
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return pd.DataFrame(columns=["datetime_hour", "region_id", *TG_REGION_COLS])
-
-    for col in TELEGRAM_TEXT_TOPLEVEL_COLUMNS:
-        if col not in df.columns:
-            df[col] = np.nan
-
-    df["date"] = normalize_telegram_dates_to_local(df["date"])
-    df = df[df["date"].notna()].copy()
-    if existing_max_dt is not None:
-        df = df[df["date"] > existing_max_dt].copy()
-
-    if df.empty:
-        return pd.DataFrame(columns=["datetime_hour", "region_id", *TG_REGION_COLS])
-
+    df = telegram_raw_df.copy()
     df["message"] = df["message"].astype(str)
-    df["datetime_hour"] = df["date"].dt.floor("h")
     df["has_threat"] = df["message"].str.contains(TG_THREAT_PATTERN, case=False, regex=True).astype(int)
     df["has_allclear"] = df["message"].str.contains(TG_ALLCLEAR_PATTERN, case=False, regex=True).astype(int)
 
@@ -706,6 +942,8 @@ def preprocess_tg_region_new_rows(store: SnapshotStore,existing_max_dt: pd.Times
     for region_id, pattern in TG_REGION_PATTERNS.items():
         mask = df["message"].str.contains(pattern, case=False, regex=True)
         tmp = df.loc[mask, ["datetime_hour", "has_threat", "has_allclear"]].copy()
+        if tmp.empty:
+            continue
         tmp["region_id"] = region_id
         region_dfs.append(tmp)
 
@@ -714,121 +952,143 @@ def preprocess_tg_region_new_rows(store: SnapshotStore,existing_max_dt: pd.Times
 
     df_region = pd.concat(region_dfs, ignore_index=True)
     hourly = (
-        df_region.groupby(["datetime_hour", "region_id"])
+        df_region.groupby(["datetime_hour", "region_id"], as_index=False)
         .agg(
             tg_region_threat_count=("has_threat", "sum"),
             tg_region_allclear_count=("has_allclear", "sum"),
             tg_region_mention_count=("has_threat", "count"),
         )
-        .reset_index()
+        .sort_values(["datetime_hour", "region_id"])
+        .reset_index(drop=True)
     )
     for col in TG_REGION_COLS:
         hourly[col] = pd.to_numeric(hourly[col], errors="coerce").fillna(0)
     return hourly
 
 
-def load_tg_region_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    df = load_csv_full(path)
-    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+
+def read_region_dim(unshifted_parquet: Path) -> pd.DataFrame:
+    cols = ["region_id", "region_key"]
+    df = read_parquet_any(unshifted_parquet, columns=cols)
     df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype("Int64")
     df = df[df["region_id"].notna()].copy()
     df["region_id"] = df["region_id"].astype(int)
-    for col in TG_REGION_COLS:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    if new_rows_df is not None and not new_rows_df.empty:
-        df = pd.concat([df, new_rows_df], ignore_index=True)
-    df = (
-        df.sort_values(["datetime_hour", "region_id"])
-        .drop_duplicates(["datetime_hour", "region_id"], keep="last")
-        .reset_index(drop=True)
-    )
+    df = df.drop_duplicates().sort_values(["region_id", "region_key"]).reset_index(drop=True)
+    if df["region_id"].nunique() != EXPECTED_REGION_COUNT:
+        warn(f"Expected {EXPECTED_REGION_COUNT} regions, got {df['region_id'].nunique()} in unshifted parquet.")
     return df
 
 
-def load_weather_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    df = load_csv_full(path)
-    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
-    df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype(int)
-    bool_cols = [c for c in df.columns if c.startswith("hour_conditions_simple_")]
-    df = coerce_bool_columns(df, bool_cols)
-    df = ensure_date_string_col(df, "day_datetime")
-    if new_rows_df is not None and not new_rows_df.empty:
-        df = pd.concat([df, new_rows_df], ignore_index=True)
-    df = remove_spring_dst_hour(df, dt_col="datetime_hour")
-    df = df.sort_values(["datetime_hour", "region_id"]).drop_duplicates(["datetime_hour", "region_id"], keep="last").reset_index(drop=True)
-    return df
+def drop_unshifted_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
+    drop_cols = [c for c in df.columns if c in UNSHIFTED_DERIVED_COLS]
+    return df.drop(columns=drop_cols, errors="ignore")
 
-def load_alarms_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    df = load_csv_full(path)
-    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
-    df["region_id"] = pd.to_numeric(df["region_id"], errors="coerce").astype(int)
-    df["alarm_active"] = pd.to_numeric(df["alarm_active"], errors="coerce").fillna(0).astype(int)
-    df["alarm_minutes_in_hour"] = pd.to_numeric(df["alarm_minutes_in_hour"], errors="coerce").fillna(0.0)
-    if new_rows_df is not None and not new_rows_df.empty:
-        df = pd.concat([df, new_rows_df], ignore_index=True)
-    df = remove_spring_dst_hour(df, dt_col="datetime_hour")
-    df = df.sort_values(["datetime_hour", "region_id"]).drop_duplicates(["datetime_hour", "region_id"], keep="last").reset_index(drop=True)
-    return df
 
-def load_isw_full(path: Path, new_rows_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    df = load_csv_full(path)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    if new_rows_df is not None and not new_rows_df.empty:
-        df = pd.concat([df, new_rows_df], ignore_index=True)
-    df = df.sort_values("date").drop_duplicates(["date"], keep="last").reset_index(drop=True)
-    return df
-
-def aggregate_telegram_hourly_from_csv(
-    path: Path,
-    new_rows_df: pd.DataFrame | None = None,
-    chunksize: int = 100_000,
+def build_isw_daily_with_last_report(
+    isw_new: pd.DataFrame,
+    unshifted_parquet: Path,
+    topic_columns: list[str],
+    start_hour: pd.Timestamp,
+    end_hour: pd.Timestamp,
+    lookback_days: int = 120,
 ) -> pd.DataFrame:
-    header_cols = read_csv_header(path)
-    topic_cols = [c for c in header_cols if re.fullmatch(r"tg_topic_\d+", c)]
-    if not topic_cols:
-        raise ValueError("Could not infer tg_topic_* columns from telegram_processed_svd.csv")
+    """
+    Build day-level ISW topics for the new hourly range.
 
-    sum_parts: list[pd.DataFrame] = []
-    count_parts: list[pd.Series] = []
+    ISW reports are not hourly and are not guaranteed to appear every day/hour.
+    For missing days we must carry forward the latest available report instead of
+    filling zeros. The seed comes from merged_sources_unshifted.parquet before
+    start_hour, and any new reports inside [start_hour, end_hour] overwrite the
+    carried-forward value for their report date.
+    """
+    if not topic_columns:
+        return pd.DataFrame(columns=["date"])
 
-    usecols = ["date", *topic_cols]
-    for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize, low_memory=False):
-        chunk["date"] = pd.to_datetime(chunk["date"], errors="coerce")
-        chunk = chunk[chunk["date"].notna()].copy()
-        if chunk.empty:
-            continue
-        chunk["datetime_hour"] = chunk["date"].dt.floor("h")
-        sum_parts.append(chunk.groupby("datetime_hour", as_index=True)[topic_cols].sum())
-        count_parts.append(chunk.groupby("datetime_hour").size().rename("msg_count"))
+    start_date = pd.Timestamp(start_hour).floor("D")
+    end_date = pd.Timestamp(end_hour).floor("D")
+    calendar = pd.DataFrame({"date": pd.date_range(start_date, end_date, freq="D")})
+    calendar["date"] = calendar["date"].dt.strftime("%Y-%m-%d")
 
-    if new_rows_df is not None and not new_rows_df.empty:
-        new_rows = new_rows_df.copy()
-        new_rows["date"] = pd.to_datetime(new_rows["date"], errors="coerce")
-        new_rows = new_rows[new_rows["date"].notna()].copy()
-        new_rows["datetime_hour"] = new_rows["date"].dt.floor("h")
-        sum_parts.append(new_rows.groupby("datetime_hour", as_index=True)[topic_cols].sum())
-        count_parts.append(new_rows.groupby("datetime_hour").size().rename("msg_count"))
-
-    if sum_parts:
-        sums = pd.concat(sum_parts).groupby(level=0).sum().sort_index()
-        counts = pd.concat(count_parts).groupby(level=0).sum().sort_index()
-        hourly = sums.div(counts, axis=0).reset_index()
-        hourly = remove_spring_dst_hour(hourly, dt_col="datetime_hour")
-        hourly = hourly.sort_values("datetime_hour").reset_index(drop=True)
+    new_reports = isw_new.copy()
+    if not new_reports.empty:
+        new_reports = ensure_date_string_col(new_reports, "date")
+        keep_cols = ["date", *[c for c in topic_columns if c in new_reports.columns]]
+        new_reports = new_reports[keep_cols].copy()
+        for col in topic_columns:
+            if col not in new_reports.columns:
+                new_reports[col] = np.nan
+        new_reports = (
+            new_reports[["date", *topic_columns]]
+            .sort_values("date")
+            .drop_duplicates("date", keep="last")
+            .reset_index(drop=True)
+        )
     else:
-        hourly = pd.DataFrame(columns=["datetime_hour", *topic_cols])
-    return hourly
+        new_reports = pd.DataFrame(columns=["date", *topic_columns])
 
 
+    seed_df = pd.DataFrame(columns=["date", *topic_columns])
+    hist_end = pd.Timestamp(start_hour) - pd.Timedelta(hours=1)
+    hist_start = hist_end - pd.Timedelta(days=lookback_days)
+    try:
+        hist = read_parquet_range_by_hours(
+            unshifted_parquet,
+            hist_start,
+            hist_end,
+            columns=["datetime_hour", *topic_columns],
+        )
+    except Exception as exc:
+        warn(f"Could not read historical ISW seed from unshifted parquet: {exc}")
+        hist = pd.DataFrame(columns=["datetime_hour", *topic_columns])
 
-def merge_historical_sources(
+    if not hist.empty:
+        hist["datetime_hour"] = pd.to_datetime(hist["datetime_hour"], errors="coerce")
+        hist = hist[hist["datetime_hour"].notna()].copy()
+        for col in topic_columns:
+            hist[col] = pd.to_numeric(hist[col], errors="coerce")
+
+        non_empty = hist[hist[topic_columns].abs().sum(axis=1) > 0].copy()
+        if not non_empty.empty:
+            last = non_empty.sort_values("datetime_hour").tail(1).copy()
+            seed_df = last[topic_columns].copy()
+            seed_df.insert(0, "date", (start_date - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+
+    combined = calendar.merge(new_reports, on="date", how="left")
+    if not seed_df.empty:
+        combined = pd.concat([seed_df, combined], ignore_index=True)
+    elif new_reports.empty:
+        warn(
+            "No new ISW report and no previous non-zero ISW seed found; "
+            "isw_topic_* will fall back to zeros. This should only happen at the very beginning of history."
+        )
+
+    combined = combined.sort_values("date").reset_index(drop=True)
+    combined[topic_columns] = combined[topic_columns].ffill()
+    combined[topic_columns] = combined[topic_columns].fillna(0)
+    combined = combined[combined["date"].isin(calendar["date"])].copy()
+    combined = combined.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+    carried_days = int(combined[topic_columns].abs().sum(axis=1).gt(0).sum()) if topic_columns else 0
+    log(
+        f"ISW daily table for merge: {len(combined)} days, "
+        f"new_reports={len(new_reports)}, non_zero_days_after_ffill={carried_days}"
+    )
+    return combined[["date", *topic_columns]]
+
+
+def merge_new_sources(
     weather_df: pd.DataFrame,
     alarms_df: pd.DataFrame,
     isw_df: pd.DataFrame,
     tg_hourly_df: pd.DataFrame,
     tg_region_df: pd.DataFrame,
+    start_hour: pd.Timestamp,
+    end_hour: pd.Timestamp,
 ) -> pd.DataFrame:
+    if weather_df.empty:
+        raise ValueError(
+            f"No weather rows for {start_hour} → {end_hour}; cannot build the merged hourly backbone."
+        )
 
     df = weather_df.copy().sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     df = df.merge(
@@ -840,21 +1100,24 @@ def merge_historical_sources(
     df["alarm_minutes_in_hour"] = pd.to_numeric(df["alarm_minutes_in_hour"], errors="coerce").fillna(0.0)
 
     isw_merge = isw_df.copy()
-    isw_merge = ensure_date_string_col(isw_merge, "date")
-    df = df.merge(isw_merge, left_on="day_datetime", right_on="date", how="left")
-    if "date" in df.columns:
-        df = df.drop(columns=["date"])
-
-    if not tg_hourly_df.empty:
-        all_hours = pd.DataFrame({"datetime_hour": pd.date_range(df["datetime_hour"].min(), df["datetime_hour"].max(), freq="h")})
-        all_hours = remove_spring_dst_hour(all_hours, dt_col="datetime_hour")
-        tg_hourly_full = all_hours.merge(tg_hourly_df, on="datetime_hour", how="left")
-        tg_cols = [c for c in tg_hourly_full.columns if c.startswith("tg_")]
-        if tg_cols:
-            tg_hourly_full[tg_cols] = tg_hourly_full[tg_cols].fillna(0)
-        df = df.merge(tg_hourly_full, on="datetime_hour", how="left")
+    if not isw_merge.empty:
+        isw_merge = ensure_date_string_col(isw_merge, "date")
+        df = df.merge(isw_merge, left_on="day_datetime", right_on="date", how="left")
+        if "date" in df.columns:
+            df = df.drop(columns=["date"])
     else:
-        warn("Telegram hourly table is empty; tg_* columns will be absent before schema alignment.")
+        warn("ISW table for new hours is empty even after last-report carry-forward; isw_topic_* may fall back to zeros.")
+
+    all_hours = pd.DataFrame({"datetime_hour": pd.date_range(start_hour, end_hour, freq="h")})
+    all_hours = remove_spring_dst_hour(all_hours, dt_col="datetime_hour")
+    if not tg_hourly_df.empty:
+        tg_hourly_full = all_hours.merge(tg_hourly_df, on="datetime_hour", how="left")
+    else:
+        tg_hourly_full = all_hours.copy()
+    tg_cols = [c for c in tg_hourly_full.columns if c.startswith("tg_topic_")]
+    if tg_cols:
+        tg_hourly_full[tg_cols] = tg_hourly_full[tg_cols].fillna(0)
+    df = df.merge(tg_hourly_full, on="datetime_hour", how="left")
 
     isw_cols = [c for c in df.columns if re.fullmatch(r"isw_topic_\d+", c)]
     tg_cols = [c for c in df.columns if re.fullmatch(r"tg_topic_\d+", c)]
@@ -863,7 +1126,6 @@ def merge_historical_sources(
     if tg_cols:
         df[tg_cols] = df[tg_cols].fillna(0)
 
-    # merge tg_region_features
     if not tg_region_df.empty:
         tg_region_merge = tg_region_df[["datetime_hour", "region_id", *TG_REGION_COLS]].copy()
         tg_region_merge["datetime_hour"] = pd.to_datetime(tg_region_merge["datetime_hour"], errors="coerce")
@@ -871,37 +1133,38 @@ def merge_historical_sources(
         df = df.merge(tg_region_merge, on=["datetime_hour", "region_id"], how="left")
         df[TG_REGION_COLS] = df[TG_REGION_COLS].fillna(0)
     else:
-        warn("tg_region_df is empty; tg_region_* columns will be zero-filled.")
         for col in TG_REGION_COLS:
             df[col] = 0
 
     df = df.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     return df
 
-def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy().sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
+
+def apply_unshifted_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+    df = df[df["datetime_hour"].notna()].copy()
+    df = df.sort_values(["region_id", "datetime_hour"]).reset_index(drop=True)
     g = df.groupby("region_id", sort=False)
 
-    # alarm lags features
-    alarm_block = pd.DataFrame(index=df.index)
-    alarm_block["alarm_lag_1"] = g["alarm_active"].shift(1).fillna(0)
-    alarm_block["alarm_lag_3"] = g["alarm_active"].shift(3).fillna(0)
-    alarm_block["alarm_lag_6"] = g["alarm_active"].shift(6).fillna(0)
-    alarm_block["alarm_lag_12"] = g["alarm_active"].shift(12).fillna(0)
-    alarm_block["alarms_in_last_24h"] = g["alarm_active"].transform(lambda x: x.shift(1).rolling(24, min_periods=1).sum()).fillna(0)
-    df = pd.concat([df, alarm_block], axis=1)
+    df["alarm_lag_1"] = g["alarm_active"].shift(1)
+    df["alarm_lag_3"] = g["alarm_active"].shift(3)
+    df["alarm_lag_6"] = g["alarm_active"].shift(6)
+    df["alarm_lag_12"] = g["alarm_active"].shift(12)
+    lag_cols = ["alarm_lag_1", "alarm_lag_3", "alarm_lag_6", "alarm_lag_12"]
+    df[lag_cols] = df[lag_cols].fillna(0)
 
-    # calendar features
-    cal_block = pd.DataFrame(index=df.index)
-    cal_block["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
-    cal_block["is_night"] = ((df["hour"] >= 23) | (df["hour"] <= 6)).astype(int)
-    df = pd.concat([df, cal_block], axis=1)
+    df["alarms_in_last_24h"] = g["alarm_active"].transform(
+        lambda x: x.shift(1).rolling(24, min_periods=1).sum()
+    )
+    df["alarms_in_last_24h"] = df["alarms_in_last_24h"].fillna(0)
 
-    # total active alarms lagged by one hour
+    df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
+    df["is_night"] = ((df["hour"] >= 23) | (df["hour"] <= 6)).astype(int)
+
     hourly_total = df.groupby("datetime_hour")["alarm_active"].sum().shift(1)
     df["total_active_alarms_lag1"] = df["datetime_hour"].map(hourly_total).fillna(0)
 
-    # neighbour alarms
     alarms_matrix = df.pivot_table(index="datetime_hour", columns="region_id", values="alarm_active", fill_value=0)
     neighbour_alarm_matrix = pd.DataFrame(index=alarms_matrix.index)
     for region, neighbours in NEIGHBOURING_REGIONS.items():
@@ -913,160 +1176,115 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df = df.merge(neighbour_alarm_long, on=["datetime_hour", "region_id"], how="left")
     df["neighbour_alarms"] = df["neighbour_alarms"].fillna(0)
 
-    # hours since last alarm
-    df["hours_since_last_alarm"] = g["alarm_active"].transform(hours_since_last_alarm_vectorized)
+    df["hours_since_last_alarm"] = df.groupby("region_id")["alarm_active"].transform(hours_since_last_alarm_vectorized)
 
-    # isw features.
     isw_topic_cols = [c for c in df.columns if re.fullmatch(r"isw_topic_\d+", c)]
     if isw_topic_cols:
         df[isw_topic_cols] = df[isw_topic_cols].fillna(0)
         df_isw_abs = df[isw_topic_cols].abs()
-        isw_block = pd.DataFrame(index=df.index)
-        isw_block["isw_total_intensity"] = df_isw_abs.sum(axis=1)
-        isw_block["isw_topic_std"] = df_isw_abs.std(axis=1)
-        isw_block["isw_topic_max"] = df_isw_abs.max(axis=1)
-        isw_block["isw_topic_mean"] = df_isw_abs.mean(axis=1)
-        isw_block["isw_topic_entropy"] = safe_entropy_from_abs(df_isw_abs)
-        df = pd.concat([df, isw_block], axis=1)
+        df["isw_total_intensity"] = df_isw_abs.sum(axis=1)
+        df["isw_topic_std"] = df_isw_abs.std(axis=1)
+        df["isw_topic_max"] = df_isw_abs.max(axis=1)
+        df["isw_topic_mean"] = df_isw_abs.mean(axis=1)
+        df["isw_topic_entropy"] = safe_entropy_from_abs(df_isw_abs)
         df["isw_velocity_24h"] = df.groupby("region_id")["isw_total_intensity"].diff(24).fillna(0)
-        df["isw_intensity_ema"] = (
-            df.groupby("region_id")["isw_total_intensity"].transform(lambda x: x.shift(1).ewm(span=24).mean()).fillna(0)
+        df["isw_intensity_ema"] = df.groupby("region_id")["isw_total_intensity"].transform(
+            lambda x: x.shift(1).ewm(span=24).mean()
         )
+        df[["isw_velocity_24h", "isw_intensity_ema", "isw_topic_entropy"]] = df[
+            ["isw_velocity_24h", "isw_intensity_ema", "isw_topic_entropy"]
+        ].fillna(0)
 
-    # telegram features
     tg_topic_cols = [c for c in df.columns if re.fullmatch(r"tg_topic_\d+", c)]
     if tg_topic_cols:
         df[tg_topic_cols] = df[tg_topic_cols].fillna(0)
         df_tg_abs = df[tg_topic_cols].abs()
-        tg_block = pd.DataFrame(index=df.index)
-        tg_block["tg_total_intensity"] = df_tg_abs.sum(axis=1)
-        tg_block["tg_topic_std"] = df_tg_abs.std(axis=1)
-        tg_block["tg_topic_max"] = df_tg_abs.max(axis=1)
-        tg_block["tg_topic_entropy"] = safe_entropy_from_abs(df_tg_abs)
-        df = pd.concat([df, tg_block], axis=1)
+        df["tg_total_intensity"] = df_tg_abs.sum(axis=1)
+        df["tg_topic_std"] = df_tg_abs.std(axis=1)
+        df["tg_topic_max"] = df_tg_abs.max(axis=1)
+        df["tg_topic_entropy"] = safe_entropy_from_abs(df_tg_abs)
         df["tg_velocity_3h"] = df.groupby("region_id")["tg_total_intensity"].diff(3).fillna(0)
-        df["tg_intensity_ema_6h"] = (
-            df.groupby("region_id")["tg_total_intensity"].transform(lambda x: x.ewm(span=6).mean()).fillna(0)
+        df["tg_intensity_ema_6h"] = df.groupby("region_id")["tg_total_intensity"].transform(
+            lambda x: x.ewm(span=6).mean()
         )
-        df["tg_intensity_zscore"] = (
-            df.groupby("region_id")["tg_total_intensity"]
-            .transform(lambda x: (x - x.rolling(24, min_periods=1).mean()) / (x.rolling(24, min_periods=1).std() + 1e-9))
-            .fillna(0)
+        df["tg_intensity_zscore"] = df.groupby("region_id")["tg_total_intensity"].transform(
+            lambda x: (x - x.rolling(24, min_periods=1).mean()) / (x.rolling(24, min_periods=1).std() + 1e-9)
         )
+        tg_features_cols = [c for c in df.columns if ("tg_" in c and "topic" not in c)]
+        df[tg_features_cols] = df[tg_features_cols].fillna(0)
 
-    # final train-ready shifts
-    df_to_train = df.copy()
+    df = ensure_date_string_col(df, "day_datetime")
+    return df.sort_values(["region_id", "datetime_hour"]).reset_index(drop=True)
 
-    isw_cols = [c for c in df_to_train.columns if c.startswith("isw_")]
-    if isw_cols:
-        df_to_train[isw_cols] = df_to_train.groupby("region_id")[isw_cols].shift(24).fillna(0)
 
-    tg_cols = [c for c in df_to_train.columns if c.startswith("tg_")]
-    if tg_cols:
-        df_to_train[tg_cols] = df_to_train.groupby("region_id")[tg_cols].shift(1).fillna(0)
+def continue_hours_since_last_alarm_exact(new_unshifted: pd.DataFrame, last_state: pd.DataFrame) -> pd.DataFrame:
+    if new_unshifted.empty or last_state.empty or "hours_since_last_alarm" not in last_state.columns:
+        return new_unshifted
 
-    hour_weather_cols = [c for c in df_to_train.columns if c.startswith("hour_")]
-    for col in hour_weather_cols:
-        if pd.api.types.is_bool_dtype(df_to_train[col]):
-            df_to_train[col] = df_to_train.groupby("region_id")[col].shift(1).fillna(False).astype(bool)
+    out = new_unshifted.copy().sort_values(["region_id", "datetime_hour"]).reset_index(drop=True)
+    state = {}
+    for row in last_state.sort_values("datetime_hour").itertuples(index=False):
+        region_id = int(getattr(row, "region_id"))
+        state[region_id] = {
+            "prev_alarm": int(getattr(row, "alarm_active")),
+            "prev_hours": float(getattr(row, "hours_since_last_alarm")),
+        }
+
+    values = []
+    for row in out[["region_id", "alarm_active"]].itertuples(index=False):
+        region_id = int(row.region_id)
+        prev = state.get(region_id)
+        if prev is None:
+            cur_hours = 0.0
+        elif int(prev["prev_alarm"]) == 1:
+            cur_hours = 0.0
         else:
-            df_to_train[col] = df_to_train.groupby("region_id")[col].shift(1).fillna(0)
+            cur_hours = float(prev["prev_hours"]) + 1.0
+        values.append(cur_hours)
+        state[region_id] = {"prev_alarm": int(row.alarm_active), "prev_hours": cur_hours}
+
+    out["hours_since_last_alarm"] = values
+    return out
+
+
+def apply_final_source_shifts(unshifted_df: pd.DataFrame) -> pd.DataFrame:
+    df = unshifted_df.copy()
+    df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
+    df = df.sort_values(["region_id", "datetime_hour"]).reset_index(drop=True)
+
+    isw_cols = [c for c in df.columns if c.startswith("isw_")]
+    if isw_cols:
+        df[isw_cols] = df.groupby("region_id")[isw_cols].shift(24).fillna(0)
+
+    tg_cols = [c for c in df.columns if c.startswith("tg_")]
+    if tg_cols:
+        df[tg_cols] = df.groupby("region_id")[tg_cols].shift(1).fillna(0)
+
+    hour_weather_cols = [c for c in df.columns if c.startswith("hour_")]
+    for col in hour_weather_cols:
+        if pd.api.types.is_bool_dtype(df[col]):
+            df[col] = df.groupby("region_id")[col].shift(1).fillna(False).astype(bool)
+        else:
+            df[col] = df.groupby("region_id")[col].shift(1).fillna(0)
 
     day_weather_cols = [
-        c for c in df_to_train.columns
+        c
+        for c in df.columns
         if (c.startswith("day_") and c not in ["day_datetime", "day_sunrise", "day_sunset", "day_moonphase", "day_of_week"])
     ]
     if day_weather_cols:
-        df_to_train[day_weather_cols] = df_to_train.groupby("region_id")[day_weather_cols].shift(24).fillna(0)
+        df[day_weather_cols] = df.groupby("region_id")[day_weather_cols].shift(24).fillna(0)
 
-    if "alarm_minutes_in_hour" in df_to_train.columns:
-        df_to_train["alarm_minutes_in_hour"] = df_to_train.groupby("region_id")["alarm_minutes_in_hour"].shift(1).fillna(0)
+    if "alarm_minutes_in_hour" in df.columns:
+        df["alarm_minutes_in_hour"] = df.groupby("region_id")["alarm_minutes_in_hour"].shift(1).fillna(0)
 
-    df_to_train = ensure_date_string_col(df_to_train, "day_datetime")
-    df_to_train = df_to_train.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
-    return df_to_train
+    df = ensure_date_string_col(df, "day_datetime")
+    return df.sort_values(["region_id", "datetime_hour"]).reset_index(drop=True)
 
-
-def cast_series_to_dtype(series: pd.Series, dtype_str: str) -> pd.Series:
-    dtype_str = str(dtype_str)
-    try:
-        if "datetime" in dtype_str:
-            return pd.to_datetime(series, errors="coerce")
-        if dtype_str == "bool":
-            return series.fillna(False).astype(bool)
-        if dtype_str.startswith("int"):
-            return pd.to_numeric(series, errors="coerce").fillna(0).astype(dtype_str)
-        if dtype_str.startswith("float"):
-            return pd.to_numeric(series, errors="coerce").astype(dtype_str)
-        if dtype_str == "object":
-            return series.astype(object)
-        return series.astype(dtype_str)
-    except Exception:
-        return series
-
-def get_existing_schema(final_parquet: Path) -> dict[str, Any] | None:
-    if not final_parquet.exists():
-        return None
-    try:
-        import pyarrow.parquet as pq  # type: ignore
-
-        schema = pq.read_schema(final_parquet)
-        columns = schema.names
-        dtypes = {name: str(schema.field(name).type) for name in columns}
-        return {"columns": list(columns), "dtypes": dtypes}
-    except Exception:
-        pass
-
-    try:
-        import fastparquet  # type: ignore
-
-        pf = fastparquet.ParquetFile(str(final_parquet))
-        return {"columns": list(pf.columns), "dtypes": {k: str(v) for k, v in pf.dtypes.items()}}
-    except Exception:
-        pass
-
-    try:
-        df = read_parquet_any(final_parquet)
-        return {"columns": list(df.columns), "dtypes": {c: str(t) for c, t in df.dtypes.items()}}
-    except Exception as exc:
-        warn(f"Could not read existing final parquet for schema alignment: {exc}")
-        return None
-
-def align_to_existing_schema(new_df: pd.DataFrame, existing_schema: dict[str, Any] | None) -> tuple[pd.DataFrame, dict[str, Any]]:
-    if existing_schema is None:
-        return new_df, {"schema_alignment": "skipped"}
-
-    expected_cols = existing_schema["columns"]
-    expected_dtypes = existing_schema["dtypes"]
-    aligned = new_df.copy()
-    missing_cols = [c for c in expected_cols if c not in aligned.columns]
-    extra_cols = [c for c in aligned.columns if c not in expected_cols]
-
-    if missing_cols or extra_cols:
-        problems: list[str] = []
-        if missing_cols:
-            problems.append(f"missing columns: {missing_cols}")
-        if extra_cols:
-            problems.append(f"unexpected columns: {extra_cols}")
-        raise ValueError(
-            "Schema drift detected while rebuilding final_merged_dataset.parquet; "
-            + "; ".join(problems)
-        )
-
-    aligned = aligned[expected_cols].copy()
-    for col in expected_cols:
-        aligned[col] = cast_series_to_dtype(aligned[col], expected_dtypes.get(col, "object"))
-
-    return aligned, {
-        "missing_columns_filled": [],
-        "extra_columns_dropped": [],
-        "final_column_count": len(aligned.columns),
-    }
 
 
 def load_latest_weather_forecast(store: SnapshotStore) -> tuple[pd.DataFrame, str | Path]:
     files = store.list_json_files("weather_forecast_24h")
-
     if not files:
         raise FileNotFoundError("No weather_forecast_24h snapshot files were found.")
 
@@ -1083,100 +1301,185 @@ def load_latest_weather_forecast(store: SnapshotStore) -> tuple[pd.DataFrame, st
             rows.append(item)
 
     df = pd.DataFrame(rows)
+    if df.empty:
+        return df, latest
     df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
     drop_now = [c for c in WEATHER_DROP_COLUMNS if c in df.columns]
-
     if drop_now:
         df = df.drop(columns=drop_now)
-
     df = ensure_date_string_col(df, "day_datetime")
     bool_cols = [c for c in df.columns if c.startswith("hour_conditions_simple_")]
     df = coerce_bool_columns(df, bool_cols)
-    df = df.sort_values(["datetime_hour", "region_id"]).drop_duplicates(["datetime_hour", "region_id"], keep="last").reset_index(drop=True)
-
+    df = (
+        df.sort_values(["datetime_hour", "region_id"])
+        .drop_duplicates(["datetime_hour", "region_id"], keep="last")
+        .reset_index(drop=True)
+    )
     return df, latest
+
 
 def save_forecast_runtime_inputs(forecast_weather_df: pd.DataFrame, runtime_dir: Path) -> None:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     forecast_path = runtime_dir / "weather_forecast_processed.parquet"
-    write_parquet_any(forecast_weather_df, forecast_path)
+    forecast_weather_df.to_parquet(forecast_path, index=False, engine="pyarrow")
+
 
 
 def run_historical_pipeline(paths: ProjectPaths) -> None:
     store = SnapshotStore(paths.snapshots)
-    completed_hour_ts = infer_completed_hour()
-    existing_final_schema = get_existing_schema(paths.final_parquet)
+    completed_hour = infer_completed_hour()
 
-    log("Historical step started")
-    log(f"completed_hour cutoff={completed_hour_ts}")
+    ensure_single_parquet_file(paths.unshifted_parquet, "merged_sources_unshifted.parquet")
+    ensure_single_parquet_file(paths.final_parquet, "final_merged_dataset.parquet")
 
-    weather_cols = read_csv_header(paths.weather_csv)
-    alarms_cols = read_csv_header(paths.alarms_csv)
-    isw_cols = [c for c in read_csv_header(paths.isw_csv) if re.fullmatch(r"isw_topic_\d+", c)]
-    tg_cols = [c for c in read_csv_header(paths.telegram_csv) if re.fullmatch(r"tg_topic_\d+", c)]
+    unshifted_schema = parquet_schema(paths.unshifted_parquet)
+    final_schema = parquet_schema(paths.final_parquet)
 
-    region_dim = csv_region_dim(paths.alarms_csv)
-    source_max = {
-        "weather": csv_max_timestamp(paths.weather_csv, "datetime_hour"),
-        "alarms": csv_max_timestamp(paths.alarms_csv, "datetime_hour"),
-        "isw": csv_max_timestamp(paths.isw_csv, "date", is_date_only=True),
-        "telegram": csv_max_timestamp(paths.telegram_csv, "date"),
-        "tg_region": csv_max_timestamp(paths.tg_region_csv, "datetime_hour"),
-    }
+    existing_max = parquet_max_timestamp(paths.unshifted_parquet, "datetime_hour")
+    if existing_max is None:
+        raise ValueError(f"Could not infer max datetime_hour from {paths.unshifted_parquet}")
 
-    log("Processing weather snapshots")
-    weather_new_rows = preprocess_weather_new_rows(store, weather_cols, completed_hour_ts, source_max["weather"])
-    log(f"Weather new rows: {len(weather_new_rows)}")
+    start_hour = existing_max + pd.Timedelta(hours=1)
+    end_hour = completed_hour
 
-    log("Processing alarms snapshots")
-    alarms_new_rows = preprocess_alarms_new_rows(store, alarms_cols, completed_hour_ts, source_max["alarms"], region_dim)
-    log(f"Alarms new rows: {len(alarms_new_rows)}")
+    log("Historical incremental step started")
+    log(f"existing_max_unshifted={existing_max}")
+    log(f"completed_hour cutoff={completed_hour}")
 
-    log("Processing ISW snapshots")
-    isw_new_rows = preprocess_isw_new_rows(store, isw_cols, source_max["isw"], paths.artifacts_dir)
-    log(f"ISW new rows: {len(isw_new_rows)}")
+    has_new_source_hours = start_hour <= end_hour
+    if not has_new_source_hours:
+        log("No completed new source hours to append to merged_sources_unshifted.parquet")
+        end_hour = existing_max
 
-    log("Processing Telegram snapshots")
-    telegram_new_rows = preprocess_telegram_new_rows(store, tg_cols, source_max["telegram"], paths.artifacts_dir)
-    log(f"Telegram new rows: {len(telegram_new_rows)}")
+    region_dim = read_region_dim(paths.unshifted_parquet)
+    isw_topic_cols = [c for c in unshifted_schema["columns"] if re.fullmatch(r"isw_topic_\d+", c)]
+    tg_topic_cols = [c for c in unshifted_schema["columns"] if re.fullmatch(r"tg_topic_\d+", c)]
 
-    log("Processing Telegram region features")
-    tg_region_new_rows = preprocess_tg_region_new_rows(store, source_max["tg_region"])
-    log(f"Telegram region new rows: {len(tg_region_new_rows)}")
+    if has_new_source_hours:
+        log(f"Building new source rows for {start_hour} → {end_hour}")
+        weather_new = preprocess_weather_new_rows(store, start_hour, end_hour)
+        alarms_new = preprocess_alarms_new_rows(store, start_hour, end_hour, region_dim)
+        isw_new = preprocess_isw_new_rows(store, isw_topic_cols, start_hour, end_hour, paths.artifacts_dir)
+        isw_daily_for_merge = build_isw_daily_with_last_report(
+            isw_new,
+            paths.unshifted_parquet,
+            isw_topic_cols,
+            start_hour,
+            end_hour,
+        )
+        telegram_raw_new = read_telegram_messages_new(store, start_hour, end_hour)
+        tg_hourly_new = build_telegram_hourly_topics(telegram_raw_new, tg_topic_cols, paths.artifacts_dir)
+        tg_region_new = build_tg_region_features(telegram_raw_new)
 
-    append_csv_rows(paths.weather_csv, weather_new_rows)
-    append_csv_rows(paths.alarms_csv, alarms_new_rows)
-    append_csv_rows(paths.isw_csv, isw_new_rows)
-    append_csv_rows(paths.telegram_csv, telegram_new_rows)
-    append_csv_rows(paths.tg_region_csv, tg_region_new_rows)
-    log("Processed source tables updated")
+        log(
+            "New rows — "
+            f"weather: {len(weather_new)}, alarms backbone: {len(alarms_new)}, "
+            f"ISW reports: {len(isw_new)}, ISW merge days: {len(isw_daily_for_merge)}, "
+            f"telegram messages: {len(telegram_raw_new)}, "
+            f"tg hourly: {len(tg_hourly_new)}, tg region: {len(tg_region_new)}"
+        )
 
-    log("Loading updated processed sources")
-    weather_full = load_weather_full(paths.weather_csv)
-    alarms_full = load_alarms_full(paths.alarms_csv)
-    isw_full = load_isw_full(paths.isw_csv)
-    tg_hourly_full = aggregate_telegram_hourly_from_csv(paths.telegram_csv)
-    tg_region_full = load_tg_region_full(paths.tg_region_csv)
+        merged_new_raw = merge_new_sources(
+            weather_new,
+            alarms_new,
+            isw_daily_for_merge,
+            tg_hourly_new,
+            tg_region_new,
+            start_hour,
+            end_hour,
+        )
 
-    log("Merging processed sources")
-    merged = merge_historical_sources(weather_full, alarms_full, isw_full, tg_hourly_full, tg_region_full)
+        expected_rows = len(remove_spring_dst_hour(pd.DataFrame({"datetime_hour": pd.date_range(start_hour, end_hour, freq="h")}))) * region_dim["region_id"].nunique()
+        if len(merged_new_raw) != expected_rows:
+            warn(f"Merged new raw rows = {len(merged_new_raw):,}; expected around {expected_rows:,}. Check missing weather/regions.")
 
-    log("Applying feature engineering")
-    rebuilt = apply_feature_engineering(merged)
-    rebuilt_aligned, _ = align_to_existing_schema(rebuilt, existing_final_schema)
+        log("Reading historical tail from unshifted parquet")
+        unshifted_tail = read_parquet_tail_by_hours(paths.unshifted_parquet, existing_max, HISTORY_TAIL_HOURS_FOR_UNSHIFTED)
+        last_state_cols = ["datetime_hour", "region_id", "alarm_active", "hours_since_last_alarm"]
+        last_state = (
+            unshifted_tail[last_state_cols]
+            .sort_values(["region_id", "datetime_hour"])
+            .groupby("region_id", as_index=False)
+            .tail(1)
+            .reset_index(drop=True)
+        )
 
-    write_parquet_any(rebuilt_aligned, paths.final_parquet)
-    log(f"final_merged_dataset.parquet updated: {paths.final_parquet}")
+        raw_tail = drop_unshifted_derived_columns(unshifted_tail)
+        combined_raw = pd.concat([raw_tail, merged_new_raw], ignore_index=True)
+        combined_raw = combined_raw.sort_values(["region_id", "datetime_hour"]).drop_duplicates(
+            ["datetime_hour", "region_id"], keep="last"
+        )
+
+        log("Applying unshifted feature engineering on tail + new rows")
+        recomputed_unshifted = apply_unshifted_feature_engineering(combined_raw)
+        new_unshifted = recomputed_unshifted[recomputed_unshifted["datetime_hour"] >= start_hour].copy()
+        new_unshifted = continue_hours_since_last_alarm_exact(new_unshifted, last_state)
+        new_unshifted = align_to_schema(new_unshifted, unshifted_schema, strict_extra=False, strict_missing=False)
+        new_unshifted = new_unshifted.sort_values(["region_id", "datetime_hour"]).reset_index(drop=True)
+
+        rewrite_parquet_file_with_new_rows(
+            paths.unshifted_parquet,
+            new_unshifted,
+            "merged_sources_unshifted.parquet",
+            key_cols=["datetime_hour", "region_id"],
+        )
+
+    else:
+        log("Skipping source preprocessing; unshifted parquet is already up to date")
+
+    unshifted_max_after_write = parquet_max_timestamp(paths.unshifted_parquet, "datetime_hour")
+    if unshifted_max_after_write is None:
+        raise ValueError(f"Could not infer max datetime_hour from {paths.unshifted_parquet} after rewrite")
+
+    comparison_start = min(
+        start_hour,
+        unshifted_max_after_write - pd.Timedelta(days=90),
+    )
+    final_rebuild_start = find_earliest_missing_final_hour(
+        paths.unshifted_parquet,
+        paths.final_parquet,
+        comparison_start,
+        unshifted_max_after_write,
+    )
+
+    if final_rebuild_start is None:
+        log("No missing final rows detected; final_merged_dataset.parquet was not rewritten")
+    else:
+        log(f"Building final shifted rows from {final_rebuild_start} → {unshifted_max_after_write}")
+        final_input_start = final_rebuild_start - pd.Timedelta(hours=HISTORY_TAIL_HOURS_FOR_FINAL)
+        final_input = read_parquet_range_by_hours(
+            paths.unshifted_parquet,
+            final_input_start,
+            unshifted_max_after_write,
+        )
+        final_input = final_input.sort_values(["region_id", "datetime_hour"]).drop_duplicates(
+            ["datetime_hour", "region_id"], keep="last"
+        )
+        shifted = apply_final_source_shifts(final_input)
+        final_new = shifted[
+            (shifted["datetime_hour"] >= final_rebuild_start)
+            & (shifted["datetime_hour"] <= unshifted_max_after_write)
+        ].copy()
+        final_new = align_to_schema(final_new, final_schema, strict_extra=True, strict_missing=True)
+        final_new = final_new.sort_values(["region_id", "datetime_hour"]).reset_index(drop=True)
+
+        rewrite_parquet_file_with_new_rows(
+            paths.final_parquet,
+            final_new,
+            "final_merged_dataset.parquet",
+            key_cols=["datetime_hour", "region_id"],
+        )
+
+    log_recent_dataset_health(paths.unshifted_parquet, "merged_sources_unshifted.parquet")
+    log_recent_dataset_health(paths.final_parquet, "final_merged_dataset.parquet")
+    log("Historical incremental step finished")
 
 
 def run_forecast_pipeline(paths: ProjectPaths) -> None:
     store = SnapshotStore(paths.snapshots)
     paths.runtime_dir.mkdir(parents=True, exist_ok=True)
 
-    log("Preparing runtime forecast inputs")
-    log(f"snapshots={paths.snapshots}")
-    log(f"runtime_dir={paths.runtime_dir}")
-
+    log("Preparing runtime forecast weather input")
     forecast_weather, latest_ref = load_latest_weather_forecast(store)
     log(f"Using latest forecast snapshot: {latest_ref}")
     save_forecast_runtime_inputs(forecast_weather, paths.runtime_dir)
@@ -1187,10 +1490,11 @@ def main() -> None:
     paths = ProjectPaths.default()
     paths.validate()
 
-    log("Starting hourly pipeline")
+    log("Starting hourly two-parquet pipeline")
     run_historical_pipeline(paths)
     run_forecast_pipeline(paths)
     log("Hourly pipeline finished successfully")
+
 
 if __name__ == "__main__":
     main()
