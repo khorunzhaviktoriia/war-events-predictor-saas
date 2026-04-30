@@ -206,13 +206,12 @@ The weather forecast for inference is also collected during this step.
 python runners/update_final_merged_dataset.py
 ```
 
-This script:
-
-- reads raw snapshots
-- preprocesses new rows
-- appends them to processed source table
-- rebuilds `data/final_merged_dataset.parquet`
-- prepares weather forecast input for inference
+The script updates the dataset incrementally:
+1. reads missing completed hours from raw snapshots;
+2. preprocesses and merges new source data;
+3. recomputes lag/rolling features using a recent historical tail;
+4. updates `merged_sources_unshifted.parquet` and `final_merged_dataset.parquet`;
+5. prepares weather forecast input for inference.
 
 #### 3. Run hourly forecast
 
