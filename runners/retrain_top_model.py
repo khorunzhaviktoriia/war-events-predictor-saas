@@ -25,7 +25,6 @@ RANDOM_STATE = 42
 TARGET_COL = "alarm_active"
 PRIMARY_METRIC = "pr_auc"
 ACCEPT_TOLERANCE = 1e-6
-THRESHOLD_GRID = np.arange(0.30, 0.71, 0.05)
 MODEL_FILENAME = "2__hist_gradient_boosting__v1.pkl"
 
 DROP_COLS = [
@@ -114,6 +113,9 @@ def load_dataset(data_path: Path) -> pd.DataFrame:
     df = pd.read_parquet(data_path)
     df["datetime_hour"] = pd.to_datetime(df["datetime_hour"], errors="coerce")
     df = df[df["datetime_hour"].notna()].copy()
+    cutoff = df["datetime_hour"].max() - pd.Timedelta(days=365 * 2)
+    df = df[df["datetime_hour"] >= cutoff]
+
     df = df.sort_values(["datetime_hour", "region_id"]).reset_index(drop=True)
     return df
 
@@ -193,12 +195,13 @@ def fit_model_with_small_search(
             val_proba = model.predict_proba(X_val)[:, 1]
             oof_proba.iloc[val_idx] = val_proba
 
-            fold_pr_auc = average_precision_score(y_val, val_proba)
-            fold_scores.append(fold_pr_auc)
-            log(f"  Fold {fold}: PR-AUC={fold_pr_auc:.4f}")
+            fold_roc = roc_auc_score(y_val, val_proba)
+            fold_ap = average_precision_score(y_val, val_proba)
+            fold_scores.append(fold_roc)
+            log(f"  Fold {fold}: ROC-AUC={fold_roc:.4f} | PR-AUC={fold_ap:.4f}")
 
         mean_score = float(np.mean(fold_scores))
-        log(f"Mean CV PR-AUC={mean_score:.4f}")
+        log(f"Mean CV ROC-AUC={mean_score:.4f}")
 
         if mean_score > best_cv_score:
             best_cv_score = mean_score
@@ -209,17 +212,10 @@ def fit_model_with_small_search(
     y_oof = y_train.loc[valid_mask]
     proba_oof = best_oof_proba.loc[valid_mask]
 
-    best_threshold = 0.50
-    best_threshold_f1 = -np.inf
-    for thr in THRESHOLD_GRID:
-        pred_oof = (proba_oof >= thr).astype(int)
-        score = f1_score(y_oof, pred_oof, zero_division=0)
-        if score > best_threshold_f1:
-            best_threshold_f1 = score
-            best_threshold = float(thr)
-
+    best_threshold = 0.59
+    
     log(f"Best params: {best_params}")
-    log(f"Best CV PR-AUC: {best_cv_score:.4f}")
+    log(f"Best CV ROC-AUC: {best_cv_score:.4f}")
     log(f"Best threshold: {best_threshold:.2f}")
 
     sample_weight_train = compute_sample_weight(class_weight="balanced", y=y_train)
@@ -287,9 +283,20 @@ def load_existing_bundle(model_path: Path) -> dict[str, Any] | None:
 def is_new_model_accepted(
     old_test_metrics: dict[str, Any] | None,
     new_test_metrics: dict[str, Any],
+    new_valid_metrics: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
     if old_test_metrics is None:
         return True, "accepted: no previous production model found"
+
+    if new_valid_metrics is not None:
+        valid_pr = float(new_valid_metrics[PRIMARY_METRIC])
+        test_pr = float(new_test_metrics[PRIMARY_METRIC])
+        if test_pr - valid_pr > 0.03:
+            return (
+                False,
+                f"rejected: suspiciously large valid→test gap "
+                f"({valid_pr:.4f} → {test_pr:.4f}), possible overfitting",
+            )
 
     old_primary = float(old_test_metrics[PRIMARY_METRIC])
     new_primary = float(new_test_metrics[PRIMARY_METRIC])
@@ -356,7 +363,7 @@ def main() -> None:
         log(f"Old valid PR-AUC={old_valid_metrics['pr_auc']:.4f} | F1={old_valid_metrics['f1']:.4f}")
         log(f"Old test  PR-AUC={old_test_metrics['pr_auc']:.4f} | F1={old_test_metrics['f1']:.4f}")
 
-    accepted, reason = is_new_model_accepted(old_test_metrics, new_test_metrics)
+    accepted, reason = is_new_model_accepted(old_test_metrics, new_test_metrics, new_valid_metrics)
     decision = "accepted" if accepted else "rejected"
     log(f"Decision: {decision.upper()} -> {reason}")
 
@@ -380,7 +387,8 @@ def main() -> None:
         "model_path": str(paths.model_path),
         "backup_path": str(backup_path) if backup_path else None,
         "best_params": best_params,
-        "best_cv_pr_auc": float(best_cv_score),
+        "best_cv_metric": "roc_auc",
+        "best_cv_score": float(best_cv_score),
         "new_threshold": float(new_threshold),
         "old_valid_metrics": old_valid_metrics,
         "old_test_metrics": old_test_metrics,
